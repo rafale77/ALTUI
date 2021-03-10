@@ -15,26 +15,43 @@ var UPnPHelper = (function(ip_addr,veraidx) {
 	//---------------------------------------------------------	
 	var _cfg = {
 		isOpenLuup: false,
-		candoPost: false
+		candoPost: false,
+		candoCORS: false
 	};
 	var _veraidx = veraidx || 0;
 	var _ipaddr = (ip_addr.trim()) || '';
-	var _directCallPossible = (_ipaddr=='') || (_ipaddr.indexOf(":3480")!=-1)
+	var _directCallPossible = function(url) {
+		//url.includes("command=proxyget")
+		var bResult = false;
+		if ((_ipaddr=='') || (_ipaddr.indexOf(":3480")!=-1)) {
+			bResult = true
+		}
+		if ((_cfg.candoCORS==true) && (url.includes("data_request")) ) {
+			bResult = true
+		}
+		//console.log( (bResult ? "DIRECT" : "Indirect") , "-",url )
+		return bResult
+	}
 	var _urlhead = (_ipaddr=='') ? window.location.pathname : ("http://{0}/port_3480/data_request".format(_ipaddr));
 	var _proxyhead = "?id=lr_ALTUI_Handler&command=proxyget&resultName=none&newUrl=";
 
 	function _proxify(url) {
-		var url = _directCallPossible ? url : (_proxyhead + encodeURIComponent( url ));
-		return url;
+		//console.log("ipaddr:%s  _cfg:%s _directCallPossible:%s, url:%s",_ipaddr,JSON.stringify(_cfg),_directCallPossible(),url)
+		if (_directCallPossible(url))
+			return url;
+		if (url.substr(0,4) != "http")
+			url = "http:"+url
+		return (_proxyhead + encodeURIComponent( url ))
 	}
 	
 	function _proxifySoap(url) {
-		var url = _directCallPossible ? url : "?id=lr_ALTUI_Handler&command=proxysoap&action={0}&newUrl={1}&envelop={2}&body={3}";
+		var url = _directCallPossible(url) ? url : "?id=lr_ALTUI_Handler&command=proxysoap&action={0}&newUrl={1}&envelop={2}&body={3}";
 		return url;
 	}
 	
+	// note must be called with this parapeter being the XHR - so called with apply(this,... )
 	function _unproxifyResult(data, textStatus, jqXHR, cbfunc) {
-		if ( _directCallPossible ) {
+		if ( _directCallPossible( this.url ) ) {
 			if ($.isFunction( cbfunc ))
 				(cbfunc)(data,  textStatus, jqXHR );
 		}
@@ -133,7 +150,8 @@ var UPnPHelper = (function(ip_addr,veraidx) {
 	function _exec(url,cbfunc,mimetype) {
 		var options = {
 			url: url,
-			type: "GET"
+			type: "GET",
+			crossDomain:true
 		};
 		if (mimetype != undefined) {
 			// options.dataType = "xml text";		NOTHING works in FF
@@ -145,11 +163,11 @@ var UPnPHelper = (function(ip_addr,veraidx) {
 		}
 		var jqxhr = $.ajax( options )
 			.done(function(data, textStatus, jqXHR) {
-				_unproxifyResult(data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
+				_unproxifyResult.apply(this,[data,textStatus, jqXHR, function(data,textStatus,jqXHR) {
 					if ($.isFunction( cbfunc )) {
 						cbfunc(data, textStatus, jqXHR);
 					}
-				});
+				}])
 			})
 			.fail(function(jqXHR, textStatus, errorThrown) {
 				if ($.isFunction( cbfunc )) {
@@ -321,14 +339,14 @@ var UPnPHelper = (function(ip_addr,veraidx) {
 				},
 			})
 			.done(function(data, textStatus, jqXHR) {
-				_unproxifyResult(data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
+				_unproxifyResult.apply(this,[data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
 					if ($.isFunction( cbfunc ))
 					{
 						var re = /<DeviceNum>(\d+)<\/DeviceNum>/; 
 						var result = data.match(re);
 						cbfunc( ( result != null) && (result.length>=2) ? result[1] : null );		// device ID in call back
 					}
-				});
+				}]);
 			})
 			.fail(function(jqXHR, textStatus, errorThrown) {
 				if ($.isFunction( cbfunc ))
@@ -431,10 +449,10 @@ var UPnPHelper = (function(ip_addr,veraidx) {
 					},
 				})
 				.done(function(data, textStatus, jqXHR) {
-					_unproxifyResult(data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
+					_unproxifyResult.apply(this,[data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
 						if ($.isFunction( cbfunc ))
 							cbfunc(data, jqXHR);
-					});
+					}]);
 				})
 				.fail(function(jqXHR, textStatus, errorThrown) {
 					if ($.isFunction( cbfunc ))
@@ -457,10 +475,10 @@ var UPnPHelper = (function(ip_addr,veraidx) {
 					}
 				})
 				.done(function(data, textStatus, jqXHR) {
-					_unproxifyResult(data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
+					_unproxifyResult.apply(this,[data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
 						if ($.isFunction( cbfunc ))
 							cbfunc(data, jqXHR);
-					});
+					}]);
 				})
 				.fail(function(jqXHR, textStatus, errorThrown) {
 					if ($.isFunction( cbfunc ))
@@ -484,10 +502,10 @@ var UPnPHelper = (function(ip_addr,veraidx) {
 				processData: false,
 			})
 			.done(function(data, textStatus, jqXHR) {
-				_unproxifyResult(data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
+				_unproxifyResult.apply(this,[data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
 					if ($.isFunction( cbfunc ))
 						cbfunc(data, jqXHR);
-				});
+				}]);
 			})
 			.fail(function(jqXHR, textStatus, errorThrown) {
 				if ($.isFunction( cbfunc ))

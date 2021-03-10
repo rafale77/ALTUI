@@ -228,6 +228,7 @@ var ALTUI_Templates_Factory= function() {
 		_devicecontainerTemplate	+=		"<div class='card-body altui-device-body'>";
 		_devicecontainerTemplate	+=		"{8}{3}";
 		_devicecontainerTemplate	+=		"</div>";
+		_devicecontainerTemplate	+=		"<div class='card-footer altui-device-message bg-{4} {9}'>{10}</div>";
 	_devicecontainerTemplate	+=	  "</div>";
 
 	var _deviceEmptyContainerTemplate="<div class=' {2} '>";
@@ -251,7 +252,7 @@ var ALTUI_Templates_Factory= function() {
 	// 0:bootgrid classes 1:altuiid 2:htmlid 3: name 4:right header buttons 5:panel body 6:left header buttons
 	var _workflowContainerTemplate=		"<div class='{0} '>";
 		_workflowContainerTemplate	+=		"<div class='card xxx altui-workflow' data-altuiid='{1}' id='{2}'>"
-		_workflowContainerTemplate	+=		"<div class='card-header altui-workflow-heading'>{6} {4}<div class='text-muted pull-right'> <small>#{1}</small></div> <span class='altui-workflow-title-name'><small>{3}</small></span>"
+		_workflowContainerTemplate	+=		"<div class='card-header altui-workflow-heading'>{4}<div class='text-muted pull-right'> <small>#{1}</small></div><div>{6} <span class='altui-workflow-title-name'><small>{3}</small></span></div>  "
 		_workflowContainerTemplate	+=		"</div>";
 		_workflowContainerTemplate	+=		"<div class='card-body altui-workflow-body'>{5}"
 		_workflowContainerTemplate	+=		"<div class='altui-active-state-name'></div>";
@@ -374,6 +375,7 @@ function _formatTrigger(controller,trigger)
 	line.lastrun = trigger.last_run ? _toIso(new Date(trigger.last_run*1000)," ") : "";
 
 	if (trigger.arguments && event.argumentList)  {
+		var condarr = []
 		$.each(trigger.arguments, function( idx,argument) {
 			var id = argument.id;
 			var eventargtemplate = null;
@@ -393,14 +395,16 @@ function _formatTrigger(controller,trigger)
 						});
 					} else if (eventarg.HumanFriendlyText && eventarg.HumanFriendlyText.text)
 						line.descr = eventarg.HumanFriendlyText.text.replace("_DEVICE_NAME_","<b>"+device.name+"</b>").replace("_ARGUMENT_VALUE_",value)
-					line.condition +="{0} {1} {2}".format(
-						eventarg.name,
-						eventarg.comparisson,
-						value );
+						condarr.push( "{0} {1} {2}".format(
+							eventarg.name,
+							eventarg.comparisson,
+							value )
+						);
 					return false;	// we had a match
 				}
 			});
 		});
+		line.condition = condarr.join(", ")
 	} else {
 		var lines = [];
 		if (event.serviceStateTable)
@@ -1967,7 +1971,7 @@ var HTMLUtils = (function() {
 	// {id:'Lua', title:_T("Lua"), html:_displayLua()},
 	// {id:'Actions', title:_T("Actions"), html:_displayActions()},
 	// ];
-	function _createAccordeon(cls,panels,button,id) {
+	function _createAccordeon(cls,panels,buttons,id) {
 		var bFirst = true;
 		var html="";
 		var id = id||""
@@ -1975,8 +1979,10 @@ var HTMLUtils = (function() {
 		$.each( panels, function (idx,panel){
 			html += "		 <div class='card' id='"+panel.id+"'>";
 			html += "			 <div class='card-header p-1' role='tab'>";
-			if (button) {
-				html += xsbuttonTemplate.format(button.id, button.class, button.label, button.title);
+			if (buttons) {
+        $(buttons).each( function(idb,button) {
+              html += xsbuttonTemplate.format(button.id, button.class, button.label, button.title);
+        })
 			}
 			html += "				 <h5 class='mb-0'>";
 			html += "					 <a data-toggle='collapse' href='#collapse"+panel.id+"'>"+panel.title+"</a><span class='altui-hint' id='altui-hint-"+panel.id+"'></span>"
@@ -2029,6 +2035,19 @@ var HTMLUtils = (function() {
 		html += "</div>";
 		return html;
 	};
+                 
+    function _drawButton(htmlid,html_attributes,title,cls,label,glyphname) {
+        var glyph = glyphTemplate.format(glyphname,label || title || '');
+        return "<button type='button' class='btn {3} ' title='{2}' {1} id='{0}'>{4}&nbsp;{5}</button>"
+           .format(
+                   htmlid||'',
+                   html_attributes||'',
+                   title||'',
+                   cls||'btn-light',
+                   glyph,
+                   label||'');
+    };
+                 
 	function _drawToolbar(htmlid,tools,cls) {
 		cls = cls||"";
 		var toolbarHtml="<div>"
@@ -2051,13 +2070,8 @@ var HTMLUtils = (function() {
 					break;
 				case 'button':
 				default:
-					toolbarHtml+="	<button type='button' class='btn {3} ' title='{2}' {1} id='{0}' >".format(tool.id||'',collapsecss,tool.title||'',tool.cls||'btn-light');
-					var glyph = glyphTemplate.format(tool.glyph,tool.label || tool.title || '');
-					toolbarHtml += glyph;
-					if (tool.label)
-						toolbarHtml+=("&nbsp;" + tool.label);
-					toolbarHtml+="	</button>";
-					break;
+                    toolbarHtml+= (" "+_drawButton(tool.id,collapsecss,tool.title,tool.cls,tool.label,tool.glyph))
+                    break;
 			}
 		});
 		toolbarHtml+="</div>";
@@ -2136,15 +2150,19 @@ var HTMLUtils = (function() {
 				case "input":
 					if (line.inputtype=="checkbox") {
 						var checked = (line.value==true)? "checked" : "";
-						html += "<div class='form-checked'>"
-						html += "<label for='{0}' class='form-check-label'> <input id='{0}' type='checkbox' class='form-check-input' value='{2}' {3} {4}> {1}</input></label>".format(
+                        //html += "<div class='form-group'>"
+                        html += "<div class='form-group'>"
+                        html += "<div class='form-check'>"
+						html += "<input id='{0}' type='checkbox' class='form-check-input' value='{2}' {3} {4}></input><label for='{0}' class='form-check-label'> {1} </label>".format(
 							line.id,
 							line.label,
 							line.value,
 							HTMLUtils.optionsToString(line.opt),
 							checked
 							);
-						html += '</div>'
+                        html += '</div>'
+                        html += '</div>'
+                        //html += '</div>'
 					} else {
 						html += "<div class='form-group'>"
 						html += "<label for='{0}' '>{1}</label>".format(line.id,line.label);
@@ -2178,6 +2196,34 @@ var HTMLUtils = (function() {
 					break;
 			}
 		});
+		return html;
+	};
+
+	/*
+	_drawTabs('id', [ 
+		{ iditem: 'zwconfig', label: 'Config' , html: 'xxx' },
+		{ iditem: 'options', label: 'Options' , html: 'xxx' }
+	])
+	*/
+	function _drawTabs(htmlid, model) {
+		var html = '<ul class="nav nav-tabs" id="myTab" role="tablist">'
+		var active = true;
+		$.each(model, function(idx,item) {
+			html += '<li class="nav-item">'
+			html += '<a class="nav-link {2}" id="{0}-tab" data-toggle="tab" href="#{0}" role="tab" aria-controls="home" aria-selected="true">{1}</a>'
+				.format( item.iditem, item.label, (active) ? "active" : "");
+			active=false;
+			html += '</li>'
+		})
+		html += '</ul>'
+		html += '<div class="tab-content" id="myTabContent">'
+		active = true;
+		$.each(model, function(idx,item) {
+			html += '<div class="tab-pane fade show {2}" id="{0}" role="tabpanel" aria-labelledby="{0}-tab">{3}</div>'
+				.format( item.iditem, item.label, (active) ? "active" : "" , item.html );
+			active=false;
+		})
+		html += '</div>'
 		return html;
 	};
 
@@ -2264,11 +2310,13 @@ var HTMLUtils = (function() {
 		createAccordeon : _createAccordeon,		// (panels)
 		drawTags 		: _drawTags,
 		drawButtonGroup : _drawButtonGroup,
+        drawButton      : _drawButton,          //(htmlid,html_attributes,title,cls,label,glyphname)
 		drawToolbar		: _drawToolbar,
 		drawSelect		: _drawSelect,
 		drawDropDown	: _drawDropDown,
 		drawFormFields	: _drawFormFields,
 		drawForm		: _drawForm,
+		drawTabs		: _drawTabs,
 		startTimer		: _startTimer,
 		stopTimer		: _stopTimer,
 		stopAllTimers	: _stopAllTimers,
@@ -3982,14 +4030,22 @@ var IconDB = ( function (window, undefined) {
 		// if undefined and not yet started to fetch, then go fetch it
 		if (_dbIcon[name]==undefined) {
 			_dbIcon[name]="pending"
-			$.ajax({
+			/*$.ajax({
 				url:  MultiBox.getIconPath(controllerid, name ),
 				dataType: "xml",
+				crossDomain: true,
 				cache:false,
 				async:false,
 				success: function (data) {
 					_dbIcon[name] = data;
 				}
+			});
+			*/
+			MultiBox.loadIcon(controllerid,	MultiBox.getIconPath(controllerid, name ), function(data) {
+				// store in cache and call callback
+				_dbIcon[name]=$.parseXML(data);
+				if ($.isFunction(cbfunc))
+					cbfunc(data);
 			});
 		}
 
@@ -4015,7 +4071,7 @@ var IconDB = ( function (window, undefined) {
 		// if undefined and not yet started to fetch, then go fetch it
 		if (_dbIcon[name]==undefined) {
 			_dbIcon[name]="pending"
-			MultiBox.getIcon(controllerid,	name, function(data) {
+			MultiBox.getIconContent(controllerid,	name, function(data) {
 				// store in cache and call callback
 				_dbIcon[name]=data;
 				if ($.isFunction(cbfunc))
@@ -4877,8 +4933,10 @@ var SceneEditor = function (scene) {
 	};
 
 	function _displayActions() {
+		var controller = MultiBox.controllerOf(scene.altuiid).controller
 		var html="";
-		html += UIManager.displayJson( 'Actions', scene.groups );
+		html += UIManager.displayJson( 'json-Actions', scene.groups );
+		html += UIManager.displayLua( 'lua-Actions', scene.groups, controller );
 		try {
 			html +="<table class='table table-responsive-OFF table-sm'>";
 			html +="<tbody>";
@@ -4962,7 +5020,7 @@ var SceneEditor = function (scene) {
 			var html="";
 			try {
 				var opmode = scene.triggers_operator || "OR"
-				html += UIManager.displayJson( 'Triggers', scene.triggers);
+				html += UIManager.displayJson( 'json-Triggers', scene.triggers);
 				if (UIManager.UI7Check()==true) {
 					html += _T("Scene Trigger Evaluation mode") + ": "+ HTMLUtils.drawButtonGroup('altui-trigger-mode-grp', {
 						attr:"data-toggle='buttons'",
@@ -5009,10 +5067,11 @@ var SceneEditor = function (scene) {
 			return html;
 		}
 
-		var jsonbutton = {id:'', class:'altui-toggle-json pull-right', label:'json', title:'json' };
+		var jsonbutton = {id:'altui-json', class:'altui-toggle-code pull-right', label:'json', title:'json' };
+		var luabutton = {id:'altui-lua', class:'altui-toggle-code pull-right', label:'lua', title:'lua' };
 		var htmlSceneEditButton = "	 <button type='submit' class='btn btn-primary pull-right altui-scene-editbutton'>"+_T("Submit")+"</button>";
 		var html="";
-		html += HTMLUtils.createAccordeon('altui-scene-editor',panels,jsonbutton,scene.altuiid );
+		html += HTMLUtils.createAccordeon('altui-scene-editor',panels,[luabutton,jsonbutton],scene.altuiid );
 		html += BlocklyArea.createBlocklyArea();
 		html += htmlSceneEditButton;
 		return html;
@@ -5069,7 +5128,7 @@ var SceneEditor = function (scene) {
 		_updateAccordeonHeaders();
 		$('#blocklyDiv').data("scenecontroller",scenecontroller);	// indicates to Blockly which scene controller to filter on
 
-		$(".altui-json-code").hide();
+		$(".altui-code").hide();
 		$(".altui-mainpanel")
 			.off("click")
 			.on("click",".altui-delscene",function() {
@@ -5326,9 +5385,15 @@ var SceneEditor = function (scene) {
 			});
 
 
-		$(".altui-toggle-json").click( function() {
+		$(".altui-toggle-code").click( function() {
+			// trick to show the accordeon pannel corresponding to the code button that was pressed
+			$(this).parent().parent().find(".panel-collapse").collapse('show');
+			
+			// hide all codes and display just the one wanted
+			$(".altui-code").hide();
+			var btnid = $(this).prop("id").substring('altui-'.length)
 			var id = $(this).closest('.card').prop('id');
-			var type = "#altui-json-"+id;
+			var type = "#altui-" + btnid + "-" + id;
 			$(type).toggle();
 		});
 
@@ -5649,7 +5714,7 @@ if ((MyLocalStorage.getSettings('ShowClock') || 0)==1) {
 		return {
 			getClockHtml: function() {
 				var glyph = (typeof(timeGlyph)!="undefined") ? timeGlyph : ""
-				return "<span class='altui-clock d-none d-sm-block shadow-sm m-0 p-1 bg-light rounded'>{0} <small>{1}</small></span>".format(glyph , new Date().toLocaleString())
+				return "<span class='altui-clock d-none d-sm-block shadow-sm m-0 p-1 bg-light rounded'>{0}{1}</span>".format(glyph , new Date().toLocaleString())
 			}
 		}
 	})(window);

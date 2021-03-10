@@ -984,7 +984,8 @@ var UserDataHelper = (function(user_data) {
 						FileDB.getFileContent(controller,service.SFilename , function( xmlstr ) {
 							var xml = $( $.parseXML( xmlstr ) );
 							$.each(xml.find("action"), function( idx,action) {
-								var name = $(action).find("name").first().text();	// action name is the first one
+								// var name = $(action).find("name").first().text();	// action name is the first one
+								var name = $(action).find(">name").text();	// action name is the first one
 								if (__findAction(that,name)==null)
 								{
 									var input=[];
@@ -1097,14 +1098,14 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 			//dataType: "text",
 		})
 		.done(function(data, textStatus, jqXHR) {
-			_upnpHelper.unproxifyResult(data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
+			_upnpHelper.unproxifyResult.apply(this,[data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
 				if (isNullOrEmpty(data))
 					_sysinfo=={};
 				else if ($.isPlainObject( data ))
 					_sysinfo = data;
 				else
 					_sysinfo = JSON.parse(data);
-			});
+			}]);
 		})
 		.fail(function(jqXHR, textStatus, errorThrown) {
 			PageMessage.message( _T("Controller {0} did not respond").format(_upnpHelper.getIpAddr()) , "warning");
@@ -1131,10 +1132,10 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 
 		var jqxhr = $.ajax( options)
 				.done(function(data, textStatus, jqXHR) {
-					_upnpHelper.unproxifyResult(data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
+					_upnpHelper.unproxifyResult.apply(this,[data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
 						if ($.isFunction(cbfunc))
 							(cbfunc)(data, textStatus, jqXHR);
-					});
+					}]);
 				})
 				.fail(function(jqXHR, textStatus, errorThrown) {
 					PageMessage.message( _T("Controller {0} did not respond").format(_upnpHelper.getIpAddr()) , "warning");
@@ -1360,8 +1361,22 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 		return "//{0}/cmh/skins/default/img/devices/device_states/{1}".format( _upnpHelper.getIpAddr(), name);
 	};
 
-	function _getIcon( imgpath , cbfunc ) {
+	function _getIconContent( imgpath , cbfunc ) {
 		var jqxhr = _httpGet("?id=lr_ALTUI_Handler&command=image",{ data: { path: imgpath } },cbfunc);
+		return jqxhr;
+	};
+
+	function _loadIcon( imgpath , cbfunc ) {
+		var options = {
+			url:	_upnpHelper.proxify( imgpath ),
+			dataType: "text",
+			crossDomain: true,
+			cache:false,
+			//async:false			CORS does not support async
+		}
+		var jqxhr = _httpGet("",options, function(data) {
+			(cbfunc)(data)
+		})
 		return jqxhr;
 	};
 
@@ -1386,6 +1401,11 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 		return jqxhr;
 	};
 
+	function _forceRefreshWorkflows(cbfunc) {
+		var jqxhr = _httpGet("?id=lr_ALTUI_Handler&command=refreshWorkflows",{dataType: "json",},cbfunc);
+		return jqxhr;
+	}
+	
 	function _getWorkflowHistory(altuiid,cbfunc) {
 		// var cmd = "cat /var/log/cmh/LuaUPnP.log | grep 'Wkflow - nextWorkflowState('".format(altuiid);
 		// var cmd = "tail -n 2000 /var/log/cmh/LuaUPnP.log | grep '[0123456789]: ALTUI: Wkflow - nextWorkflowState(.*, {0},.*==>'".format(altuiid);
@@ -1435,6 +1455,53 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 			return 12;
 		return ( parseInt(_user_data.mode_change_delay || 9) +3);
 	};
+
+	function _getMajorMinor() {
+		var bi = _getBoxFullInfo()
+		if (bi.ShortVersion) {
+			var results = bi.ShortVersion.match(/(\d+)\.(\d+)/)
+			if ( results.length >2 )
+				return {
+					major: parseInt(results[1]),
+					minor: parseInt(results[2])
+				}
+		}
+		return null 	// UNKNOWN
+	};
+
+	function _candoCORS(user_data) {
+		return (_user_data.AllowCORS == "1")
+	};
+	
+	function _enableNightlyHeal(bEnableOrNull, cbfunc) {
+		var value = _user_data.EnableNightlyHeal
+		if (bEnableOrNull != null) {
+			var value = bEnableOrNull ? 1 : 0 
+			var jqxhr = _httpGet("?id=variableset&Variable=EnableNightlyHeal&Value="+value,{},function(){
+				_user_data.EnableNightlyHeal = value.toString();
+				if ($.isFunction(cbfunc)) { 
+				    (cbfunc)();
+			    }
+			});
+			return jqxhr
+		}
+		return (value=="0") ? false : true  
+	};
+
+	function _enableCORS( bEnable , cbfunc ) {
+		//Example request:
+		// http://IP:3480/data_request?id=variableset&Variable=AllowCORS&Value=1 //enable
+		// http://IP:3480/data_request?id=variableset&Variable=AllowCORS&Value=0 //disable
+		var value = (bEnable==true) ? 1 : 0
+		var jqxhr = _httpGet("?id=variableset&Variable=AllowCORS&Value="+value,{},function(){
+			_user_data.AllowCORS = value.toString();
+			if ($.isFunction(cbfunc)) {
+				(cbfunc)();
+			}
+		});
+		return jqxhr;
+	};
+
 	function _getDeviceByType( device_type , opt_parents_arr) {
 		for (var i=0; i<_user_data.devices.length; i++ ) {
 			if	( (_user_data.devices[i].device_type==device_type) && (opt_parents_arr==undefined || opt_parents_arr.indexOf(_user_data.devices[i].id_parent)!=-1) )
@@ -1575,8 +1642,39 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 		return UserDataHelper(_user_data).evaluateConditions(deviceid,cat,subcat,conditions);
 	};
 
+/*
+function testcors() {
+	var url = "http://192.168.1.16/port_3480/data_request?id=variableset&Variable=AllowCORS&Value=1"
+	$.get(url)		
+	.done( function (data, textStatus, jqXHR) {
+		console.log("enable cors:",data)
+		//url="http://192.168.1.16/port_3480/data_request?id=lu_status2&output_format=json&DataVersion=1&Timeout=5&MinimumDelay=1500"
+		url="http://192.168.1.16/port_3480/data_request?id=user_data"
+		$.ajax({
+				// url:'https://script.google.com/macros/s/AKfycbyu0Xc8Hd3ruJolJGUsi5Chbq4GUnAl89LeDpky-1_nQA23kHs/exec',	// test
+				url: url,
+				method:	"GET",
+				cache:false,
+				//dataType: "json",
+				crossDomain:true
+				// processData: false			// prevent jquery to process data to receive it as pure TEXT
+			})
+		.done( function (data, textStatus, jqXHR) {
+			console.log("test user data",data)
+		})
+		.fail( function( jqXHR, textStatus, errorThrown ) {
+			console.log(textStatus)
+		})
+	})
+	.fail( function( jqXHR, textStatus, errorThrown ) {
+		console.log(textStatus)
+	})
+}
+*/
+
 	function _refreshEngine() {
 		// console.log("controller #%s refreshEngine %s",_uniqID, "?id=lu_status2&output_format=json&DataVersion="+_status_data_DataVersion)
+		//testcors()
 		var jqxhr = _httpGet("?id=lu_status2&output_format=json&DataVersion="+_status_data_DataVersion+"&Timeout={0}&MinimumDelay={1}".format(
 				(_uniqID==0 ? LU_STATUS_TIMEOUT : 5 ),			// cannot afford to wait 60 sec in the Lua handler for Proxied units
 				LU_STATUS_MINDELAY
@@ -1599,6 +1697,7 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 								_user_data.devices[userdata_device_idx].status = device.status;
 								_user_data.devices[userdata_device_idx].Jobs = device.Jobs;
 								_user_data.devices[userdata_device_idx].dirty = true;
+								_user_data.devices[userdata_device_idx].tooltip = device.tooltip;
 
 								if (device.states !=null) {
 									for (var j=0; j<device.states.length; j++) {
@@ -1756,20 +1855,25 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 			});
 
 			// update upnp information
+			var promises = []
 			$.each(_user_data.devices || [], function(idx,device) {
 				var dt = device.device_type;
 				var df = device.device_file;
 				if (dt && (dt!="") && df && (df!="") )
-					MultiBox.updateDeviceTypeUPnpDB( _uniqID, dt, device.device_file);	// pass device file so UPNP data can be read
+					promises.push( MultiBox.updateDeviceTypeUPnpDB( _uniqID, dt, device.device_file) ) ;	// pass device file so UPNP data can be read
 				if (device!=null) {
 					device.dirty=true;
 					EventBus.publishEvent("on_ui_deviceStatusChanged",device);
 				}
 			});
-			_upnpHelper.setConfig( {
-				isOpenLuup: _isOpenLuup(_user_data),
-				candoPost: _candoPost(_user_data)
-			});
+			$.when.apply($,promises)
+			.then(function(){
+				_upnpHelper.setConfig( {
+					isOpenLuup: _isOpenLuup(_user_data),
+					candoPost: _candoPost(_user_data),
+					candoCORS: _candoCORS(_user_data),
+				});
+			})
 			result = (data.devices != null);
 		} 
 		return result
@@ -1872,11 +1976,12 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 		);
 		return _isOpenLuup(user_data) ||  (( _uniqID==0) && ( versioninfo.length>=4 ) && (versioninfo[1] >=1 ) && (versioninfo[2] >=7 ) && (versioninfo[3] >= 2138 ));
 	};
+
 	function _isOpenLuup(user_data) {
 		if ( (user_data.BuildVersion==undefined) || (user_data.BuildVersion.startsWith("*1.5")==true) )
 			return false;
 		return (user_data.SvnVersion==undefined)
-	}
+	};
 	function _getLuaStartup() {
 		if (_user_data.encoded_lua==1) {
 			try {
@@ -2312,6 +2417,13 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 				// console.log("doPart() - clearData %o",context)
 				// no more data to send but we need to clean up Vera to remove extra variable
 				_clearData(context.doPost, context.handle, context.key, context.name, context.npage, function(data) {
+					// vera specific logic: if saveData was for "Wflow", "Workflows"  we force a workflow refresh of the lua driver cache )
+					if ((context.key=="Wflow") && (context.name=="Workflows")) {
+						_forceRefreshWorkflows( function(data) {
+							cbfunc("ok");	// callback when the refresh was done
+						})
+						return // we will call back later
+					}
 					// now it is finished
 					cbfunc("ok");
 				});
@@ -2660,11 +2772,16 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 	getFileContent :  _getFileContent,			//( filename , cbfunc)
 	triggerAltUIUpgrade : _triggerAltUIUpgrade,	// (newversion,newtracnum)	: newrev number in TRAC
 	getIconPath		: _getIconPath,		// ( src )
-	getIcon			: _getIcon,			// workaround to get image from vera box
+	getIconContent		: _getIconContent,			// workaround to get image from vera box
+	loadIcon		: _loadIcon,
 	getWeatherSettings : _getWeatherSettings,
 	isUI5			: _isUI5,
 	isOpenLuup		: function() { return _isOpenLuup(_user_data) },
 	candoPost		: function() { return _candoPost(_user_data) },
+	candoCORS		: function() { return _candoCORS(_user_data) }, 
+	getMajorMinor	: _getMajorMinor,
+	enableNightlyHeal : _enableNightlyHeal, //(bEnableOrNull) 
+	enableCORS		: _enableCORS,		// (bEnable, cbfunc )
 	getBoxInfo		: _getBoxInfo,		//()
 	getBoxFullInfo	: _getBoxFullInfo,		//()
 	getLuaStartup	: _getLuaStartup,
@@ -2704,6 +2821,7 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 	getWorkflows	: _getWorkflows,
 	getWorkflowStatus : _getWorkflowStatus,
 	getWorkflowHistory: _getWorkflowHistory,
+	forceRefreshWorkflows: _forceRefreshWorkflows,
 	isWorkflowEnabled : _isWorkflowEnabled,
 	getPlugins		: _getPlugins,
 	getPluginByID	: _getPluginByID,
@@ -2767,12 +2885,13 @@ var VeraBox = ( function( uniq_id, ip_addr ) {
 	saveEngine		: _saveEngine,
 	clearEngine		: _clearEngine,
 	loadEngine		: _loadEngine,		// optional user_data
+	initDataEngine : _initDataEngine,
 	isUserDataCached	: _isUserDataCached,
 	RequestBackup : _RequestBackup,
 	initEngine		: function( firstuserdata )		{
-						_bStopEngine = false;
-						_loadEngine( firstuserdata );
-						return _initDataEngine();				// init the data collection engine
+		_bStopEngine = false;
+		_loadEngine( firstuserdata );
+		return _initDataEngine();				// init the data collection engine
 	},
   };
 });	// not invoked, object does not exists
@@ -2783,842 +2902,3 @@ function _todo() {
 	console.log( stack );
 	return null;
 };
-
-var LearnBox = ( function( uniq_id ) {
-	// privates
-	var _uniqID = uniq_id;
-	var _user_data = {
-		devices:[],
-		scenes:[],
-		rooms:[ {
-			id:1,
-			name:_T("- Auto -")
-		}]
-	}
-	
-	// Event Callbacks
-	function _onDeviceChange(event,device) {
-		if (_user_data.devices[0] && (device.altuiid == _user_data.devices[0].realdevice.altuiid)) {
-			_user_data.devices[0].dirty = true;
-			_user_data.devices[0].states = null;
-			_user_data.devices[0].states= device.states.slice();	// clone array
-			UIManager.refreshUI(false);
-		}
-	};
-	
-	function _onUserAction(evt, Altuiid, service, action, params) {
-		console.log(evt, Altuiid, service, action, JSON.stringify(params));
-		if (evt == "on_deviceAction") {
-			var device = MultiBox.getDeviceByAltuiID(Altuiid);
-			var controller = MultiBox.controllerOf(Altuiid).controller
-			// avoid infinite loop
-			if (controller != _uniqID) {
-				var newdevice = jQuery.extend(true, {}, device , {
-					room: "1",
-					altuiid: MultiBox.makeAltuiid(_uniqID, 1),
-					realdevice: device,
-					id:1,
-					id_parent:0,
-				} );
-				// newdevice.states=[];	//clear this, we do not need them
-				_user_data.devices[0] = newdevice
-				
-				// copy device static data and device UPNP
-				var devstaticdata = MultiBox.getDeviceStaticData(device);
-				MultiBox.updateDeviceTypeUIDB( _uniqID, device.device_type, devstaticdata);
-				MultiBox.updateDeviceTypeUPnpDB( _uniqID, device.device_type, device.device_file);	// pass device file so UPNP data can be read			
-			}
-		}
-	};
-	
-	function _initEngine() {
-		var deferred  = $.Deferred()
-		EventBus.registerEventHandler("on_ui_deviceStatusChanged",this,this.onDeviceChange)
-		EventBus.registerEventHandler("on_deviceAction",this,this.onUserAction);
-		EventBus.registerEventHandler("on_sceneRun",this,this.onUserAction);
-		// EventBus.publishEvent("on_ui_userDataFirstLoaded_"+_uniqID);
-		EventBus.publishEvent("on_ui_userDataLoaded_"+_uniqID);
-		deferred.resolve(true)
-		return deferred;
-	};
-
-	function _getBoxFullInfo() {
-		return {
-			dbstats:'tbd'
-		};
-	};
-	
-	function _asyncResponse(arr, func , filterfunc, endfunc) {
-		var res=[];
-		if (!arr)
-			return null;
-
-		$.each(arr, function(idx,elem) {
-			if (arr[idx].altuiid==undefined)
-				arr[idx].altuiid="{0}-{1}".format(_uniqID,elem.id);
-			if ( ($.isFunction(filterfunc)==false) || (filterfunc(elem)==true) ) {
-				res.push(elem);
-				if ($.isFunction( func ))
-					func(idx+1,elem);	// device id in Lua is idx+1
-			}
-		});
-
-		if ( $.isFunction( endfunc ) )	{
-			endfunc(res);
-		}
-		return res;
-	};
-
-	function _deleteDevice(id) {
-		var device = _user_data.devices[parseInt(deviceid)-1]
-		return MultiBox.deleteDevice(device.realdevice)
-	};
-	function _renameDevice(device, newname, roomid) {
-		return MultiBox.renameDevice(device.realdevice,newname,roomid)
-	};
-	function _getDevices( func , filterfunc, endfunc ) {
-		return _asyncResponse(_user_data.devices, func , filterfunc, endfunc)
-	};
-	function _getWatches(whichwatches , filterfunc) {
-		return null;
-	};
-	function _getScenes( func , filterfunc, endfunc ) {
-		return _asyncResponse(_user_data.scenes, func , filterfunc, endfunc)
-	};
-	function _getRooms( func , filterfunc, endfunc ) {
-		return _asyncResponse(_user_data.rooms, func , filterfunc, endfunc)
-	};
-	function _getRoomsSync() { 
-		return _user_data.rooms 
-	};
-	function _getRoomByID( roomid ) {
-		return _user_data.rooms[parseInt(roomid)-1];
-	};
-	function _getCategories( func, filterfunc, endfunc )
-	{
-		return _asyncResponse([], func , filterfunc, endfunc);
-	};
-	function _getStatus( deviceid, service, variable ) {
-		var device = _user_data.devices[parseInt(deviceid)-1]
-		return MultiBox.getStatus(device.realdevice, service, variable )
-	};
-	function _setStatus( deviceid, service, variable, value, dynamic ) {
-		var device = _user_data.devices[parseInt(deviceid)-1]
-		return MultiBox.setStatus(device.realdevice, service, variable, value, dynamic)
-	};
-	function _getStates( deviceid  ) {
-		var device = _user_data.devices[parseInt(deviceid)-1]
-		return MultiBox.getStates(device.realdevice)
-	};
-	function _getDeviceBatteryLevel(device) {
-		return null;
-	};
-	function _getDeviceByID( deviceID ) {
-		return _user_data.devices[parseInt(deviceID)-1]
-	};
-	function _runAction( deviceID, service, action, params, cbfunc ) {
-		var device = _user_data.devices[parseInt(deviceID)-1]
-		return MultiBox.runAction(device.realdevice, service, action, params,cbfunc)
-	};
-	function _getSceneByID(sceneid) {
-		for (var i=0;i<_user_data.scenes.length;i++) {
-			if (_user_data.scenes[i].id == sceneid)
-				return _user_data.scenes[i];
-		}
-		return null;
-	};
-	function _getNewSceneID() {
-		return null;
-	};
-	function _getScenesSync() {
-		return _user_data.scenes;
-	};
-	function _getBoxInfo() {
-		return {};
-	};
-
-	function _getUsers(func , filterfunc, endfunc ) {
-		return null;
-	};
-	function _getUsersSync() {
-		return null;
-	};
-	function _getUserByID(userid) {
-		return null;
-	};
-
-	function _getWeatherSettings() {
-		return null;
-	};
-	function _getDeviceDependants(device) {
-		return MultiBox.getDeviceDependants(device.realdevice)
-	};
-	function _getCategoryTitle(catnum)
-	{
-		return null;
-	};
-	function _getFileUrl( filename) {
-		return null;
-	};
-	function _getFileContent( filename , cbfunc) {
-		return MultiBox.getFileContent( 0, filename, cbfunc )
-	};
-	function _getIconPath(iconname) {
-		return MultiBox.getIconPath(0, iconname)
-	};
-	function _getDeviceActions(device,cbfunc) {
-		MultiBox.getDeviceActions(device.realdevice,cbfunc)
-	};
-	function _getDeviceEvents(device) {
-		return MultiBox.getDeviceEvents(device.realdevice)
-	};
-	function _initializeSysinfo() {
-		return {
-			"learningcontroller" : "@amg0",
-		}
-	};
-
-	// explicitly return public methods when this object is instantiated
-	return {
-		onDeviceChange : _onDeviceChange,
-		onUserAction : _onUserAction,	// event callback
-		
-		//---------------------------------------------------------
-		// PUBLIC  functions as a controller
-		//---------------------------------------------------------
-		getFileUrl		: _getFileUrl,			//(filename)
-		getFileContent	: _getFileContent,
-		getUPnPHelper	: function ()	{ console.assert(false,"Altuibox controller %s does not have a UPNP interface",_ip_addr); return null; } ,
-		getIpAddr		: function ()	{ return _ip_addr; },
-		getUrlHead		: function ()	{ return (_ipaddr=='') ? window.location.pathname : ("http://{0}".format(_ip_addr)); },
-		getDataProviders	: _todo,	// (cbfunc)
-		triggerAltUIUpgrade : _todo,	// (newversion,newtracnum)	: newrev number in TRAC
-		getIconPath		: _getIconPath,		// ( src )
-		getIcon			: _todo,		// workaround to get image from vera box
-		getWeatherSettings : _getWeatherSettings,
-		isUI5			: function()	{return false},
-		isOpenLuup 		: function()	{return false},
-		candoPost		: function() 	{return false},
-		getBoxInfo		: _getBoxInfo,				//()
-		getBoxFullInfo	: _getBoxFullInfo,		//()
-		getRooms		: _getRooms,	// in the future getRooms could cache the information and only call _getRooms when needed
-		getRoomsSync	: _getRoomsSync,
-		getRoomByID		:  _getRoomByID,
-		getDevices		:  _getDevices,
-		getDevicesSync	: function()	{ return _user_data.devices },
-		getDeviceByType : _todo,
-		getDeviceByAltID : _todo,
-		getDeviceByID	: _getDeviceByID,	// devid
-		getDeviceBatteryLevel : _getDeviceBatteryLevel,
-		getDeviceStaticUI : _todo,
-		getDeviceVariableHistory : _todo,
-		getDeviceActions: _getDeviceActions,
-		getDeviceEvents : _getDeviceEvents,
-		getDeviceDependants: _getDeviceDependants,
-		runAction : _runAction,
-		addWatch			: _todo,
-		delWatch			: _todo,
-		getWatches			: _getWatches,
-		isDeviceZwave	: function(device) { return false },
-		isDeviceZigbee	: function(device) { return false },
-		isDeviceBT		: function(device) { return false },
-		getScenes		: _getScenes,
-		getSceneHistory : _todo,
-		getScenesSync	: _getScenesSync,
-		getSceneByID	: _getSceneByID,
-		getNewSceneID	: _getNewSceneID,
-
-		// pages
-		getCustomPages : _todo,
-
-		// worklflows
-		// getWorkflows	: _todo,
-		// getWorkflowStatus : _todo,
-		// getWorkflowHistory: _todo,
-		// isWorkflowEnabled : function()	{ return false },
-		// getPlugins		: _todo,
-		// getPluginByID	: _todo,
-		modifyPlugin	: _todo,
-		getUsers		: _getUsers,
-		getUsersSync	: _getUsersSync,
-		getUserByID		: _getUserByID,
-		setAttr			: _todo,
-		setStatus		: _setStatus,
-		getStatus		: _getStatus, //	( deviceid, service, variable )
-		getJobStatus	: _todo,
-		getStates		: _getStates,
-		evaluateConditions : function (deviceid,cat,subcat,conditions) {
-			return UserDataHelper(_user_data).evaluateConditions(deviceid,cat,subcat,conditions);
-		},
-
-		// createDevice	: _todo,			// not supported on other controller than 0
-		deleteDevice	: _deleteDevice,
-		renameDevice	: _renameDevice,
-		modifyDevice	: _todo,
-		updateNeighbors	: _todo,
-		// createRoom		: _todo,
-		// deleteRoom		: _todo,
-		// renameRoom		: _todo,
-		runScene		: _todo,
-		// editScene		: _todo,
-		// renameScene		: _todo,
-		// deleteScene		: _todo,
-		// reloadEngine	: _todo,		// not allowed
-		// reboot			: _todo,	// not allowed
-		// getLuaStartup	: _todo,	// not allowed
-		// setStartupCode	: _todo,	// not allowed
-
-		getCategoryTitle : _getCategoryTitle,
-		getCategories	: _getCategories,	//( cbfunc, filterfunc, endfunc ),
-		getDeviceTypes	: _todo,
-
-		// misc
-		// getPower		: _todo, //function (cbfunc) { (cbfunc)("No devices") },
-		setColor		: _todo,
-		// resetPollCounters : _todo,
-		// osCommand		: _todo,
-		// runLua			: _todo,
-
-		// UI5 Compatibility mode: caching user data changes and saving them at user request
-		updateChangeCache : _todo,
-		saveChangeCaches  : _todo,
-		initializeJsonp	  : function () {
-			jsonp={};
-			jsonp.ud =_user_data;
-			return jsonp;
-		},
-		initializeSysinfo : _initializeSysinfo,
-
-		// save page data into altui plugin device
-		saveData		: _todo,
-		stopEngine		: _todo,
-		saveEngine		: _todo,
-		clearEngine		: _todo,
-		loadEngine		: _todo,
-		initEngine		: _initEngine,
-		RequestBackup 	: _todo
-	}
-});
-
-var AltuiBox = ( function( uniq_id, ip_addr ) {
-	var _uniqID = uniq_id;		// assigned by Multibox, unique, can be used for Settings & other things
-	var _ip_addr = (ip_addr=="") ? window.location.host : ip_addr;
-	var _altuibox_url = "//{0}".format(_ip_addr);
-	var _user_data = {};
-	var _dataEngine = null;
-
-
-	function _refreshEngine() {
-		// start the polling loop to get user_data
-		var jqxhr = $.ajax( {
-			url: _altuibox_url+"/api/engine_data",
-			type: "GET",
-			cache: false,
-			dataType : 'json'
-		})
-		.done(function(data) {
-			var bFirst = ( _user_data=={} );
-			_user_data = $.extend(true,{},data);
-			//assigns altuiids
-			$.each(_user_data.devices, function(idx,device) {
-				device.altuiid = "{0}-{1}".format(_uniqID,device.id);
-				device.favorite=Favorites.get('device',device.altuiid);
-			});
-			$.each(_user_data.scenes, function(idx,scene) {
-				scene.altuiid = "{0}-{1}".format(_uniqID,scene.id);
-				scene.favorite=Favorites.get('scene',scene.altuiid);
-			});
-			_asyncResponse(_user_data.rooms);
-			_user_data.static_data=[];
-			// update upnp information
-			$.each(_user_data.devices || [], function(idx,device) {
-				var json = device.device_json;
-				var dt = device.device_type;
-				if (dt && json)
-					FileDB.getFileContent(_uniqID, json , function( jsonstr ) {
-						if (jsonstr) {
-							try {
-								// if file found and content != null
-								var json = JSON.parse(jsonstr)
-								_user_data.static_data.push(  json );
-								MultiBox.updateDeviceTypeUIDB( _uniqID, dt, json );
-								if (dt!=undefined)
-									MultiBox.updateDeviceTypeUPnpDB( _uniqID, dt, device.device_file);	// pass device file so UPNP data can be read
-							} catch (e) {
-								console.error("Parsing error:", e);
-							}
-						}
-					});
-				if (device!=null) {
-					device.dirty=true;
-					EventBus.publishEvent("on_ui_deviceStatusChanged",device);
-				}
-			});
-
-			_dataEngine = setTimeout( _refreshEngine, 3000 );
-			// if (bFirst)
-				// EventBus.publishEvent("on_ui_userDataFirstLoaded_"+_uniqID);
-			EventBus.publishEvent("on_ui_userDataLoaded_"+_uniqID);
-		})
-		.fail(function(jqXHR, textStatus, errorThrown) {
-			// if (_user_data == {})
-				// EventBus.publishEvent("on_ui_userDataFirstLoaded_"+_uniqID);
-			_user_data = {};
-			_dataEngine = setTimeout( _refreshEngine, 2000 );
-		})
-		.always(function() {
-		});
-		return jqxhr;
-	};
-
-	function _initEngine() {
-		_dataEngine = null;
-		return _refreshEngine()
-	};
-
-	function _asyncResponse(arr, func , filterfunc, endfunc) {
-		var res=[];
-		if (!arr)
-			return null;
-
-		$.each(arr, function(idx,elem) {
-			if (arr[idx].altuiid==undefined)
-				arr[idx].altuiid="{0}-{1}".format(_uniqID,elem.id);
-			if ( ($.isFunction(filterfunc)==false) || (filterfunc(elem)==true) ) {
-				res.push(elem);
-				if ($.isFunction( func ))
-					func(idx+1,elem);	// device id in Lua is idx+1
-			}
-		});
-
-		if ( $.isFunction( endfunc ) )	{
-			endfunc(res);
-		}
-		return res;
-	};
-
-	function _getDevices( func , filterfunc, endfunc ) {
-		if (_user_data.devices!=null) {
-			return _asyncResponse(_user_data.devices, func , filterfunc, endfunc)
-		};
-		return _asyncResponse([], func , filterfunc, endfunc);
-	};
-	function _getWatches(whichwatches , filterfunc) {
-		if ((whichwatches!="VariablesToWatch") && (whichwatches!="VariablesToSend"))
-			return null;
-		return [];
-	};
-	function _getScenes( func , filterfunc, endfunc ) {
-		if (_user_data.scenes!=null) {
-			return _asyncResponse(_user_data.scenes, func , filterfunc, endfunc)
-		};
-		return _asyncResponse([], func , filterfunc, endfunc);
-	};
-	function _getRooms( func , filterfunc, endfunc ) {
-		if (_user_data.rooms!=null) {
-			return _asyncResponse(_user_data.rooms, func , filterfunc, endfunc)
-		};
-		return _asyncResponse([], func , filterfunc, endfunc);
-	};
-	function _getRoomsSync() { return _user_data.rooms };
-
-	function _getCategories( func, filterfunc, endfunc )
-	{
-		if (_user_data.categories!=null) {
-			return _asyncResponse(_user_data.categories, func , filterfunc, endfunc)
-		};
-		return _asyncResponse([], func , filterfunc, endfunc);
-	};
-	function _getStatus( deviceid, service, variable ) {
-		return UserDataHelper(_user_data).getStatus( deviceid, service, variable );
-	};
-	function _getStates( deviceid  )
-	{
-		for (var i=0; i<_user_data.devices.length; i++) {
-			var device = _user_data.devices[i];
-			if (device.id == deviceid)
-				return _user_data.devices[i].states;
-		}
-		return null;
-	};
-	function _getDeviceBatteryLevel(device) {
-		var batteryLevel=_getStatus( device.id, "urn:micasaverde-com:serviceId:HaDevice1", "BatteryLevel" );
-		return batteryLevel; // Math.floor((Math.random() * 100) + 1);
-	};
-
-	function _getDeviceByID( devid ) {
-		for (var i=0; i<_user_data.devices.length; i++) {
-			if (_user_data.devices[i].id==devid)
-				return _user_data.devices[i];
-		}
-		return null;
-	};
-	function _runAction( deviceID, service, action, params, cbfunc ) {
-		var jqxhr = $.ajax( {
-			url: _altuibox_url+"/api/devices/{0}/action/{1}/{2}".format(deviceID,service,action),
-			type: "PUT",
-			cache: false,
-			data: {
-				params:JSON.stringify(params)
-			},
-		})
-		.done(function(data, textStatus, jqXHR) {
-			if ($.isFunction(cbfunc))
-				(cbfunc)(data);
-		})
-		.fail(function(jqXHR, textStatus, errorThrown) {
-			if ($.isFunction(cbfunc))
-				(cbfunc)(null);
-		})
-		.always(function() {
-		});
-		return jqxhr;
-	};
-	function _getBoxFullInfo() {
-		var ordered = {};
-		$.each( Object.keys(_user_data).sort(), function(i,key) {
-			var val = _user_data[key];
-			if (!$.isArray(val) && !$.isPlainObject(val))
-				ordered[key]=val;
-		});
-		return ordered;
-	};
-	function _getRoomByID( roomid ) {
-		for (var i=0; i<_user_data.rooms.length; i++) {
-			if (_user_data.rooms[i].id == roomid)
-				return _user_data.rooms[i];
-		}
-		return null;
-	};
-	function _getSceneByID(sceneid) {
-		for (var i=0;i<_user_data.scenes.length;i++) {
-			if (_user_data.scenes[i].id == sceneid)
-				return _user_data.scenes[i];
-		}
-		return null;
-	};
-	function _getNewSceneID() {
-		return ALTUI_NEW_SCENE_ID;
-	};
-	function _getScenesSync() {
-		return _user_data.scenes || [];
-	};
-	function _getBoxInfo() {
-		return {
-			PK_AccessPoint: _user_data.PK_AccessPoint,
-			BuildVersion: _user_data.BuildVersion,
-			City_description: _user_data.City_description,
-			Region_description: _user_data.Region_description,
-			Country_description: _user_data.Country_description
-		};
-	};
-
-	function _getUsers(func , filterfunc, endfunc ) {
-		if (_user_data.users !=null )
-			return _asyncResponse( _user_data.users.sort(altuiSortByName2), func , filterfunc, endfunc);
-		return _user_data.users;
-	};
-	function _getUsersSync() {
-		return _user_data.users;
-	};
-	function _getUserByID(userid) {
-		var user=null;
-		if ( _user_data.users ) {
-			$.each(_user_data.users, function( idx,usr) {
-				if (usr.id==userid) {
-					user = usr;
-					return false;
-				}
-			});
-		}
-		return user;
-	};
-
-	function _getWeatherSettings()
-	{
-		var target = {tempFormat: "", weatherCountry: "", weatherCity: ""};
-		$.extend(target, _user_data.weatherSettings);
-		return target;
-	};
-	function _getVariable(variable, cbfunc)
-	{
-		var jqxhr = $.ajax( {
-			url: _altuibox_url+"/api/variables/"+variable,
-			type: "GET",
-			cache: false,
-			dataType : 'json'
-		})
-		.done(function(data, textStatus, jqXHR) {
-			if ($.isFunction(cbfunc))
-				(cbfunc)(data.value || "1");
-		})
-		.fail(function(jqXHR, textStatus, errorThrown) {
-			if ($.isFunction(cbfunc))
-				(cbfunc)(null);
-		})
-		.always(function() {
-		});
-		return jqxhr;
-	};
-	function _setVariable(variable, value, cbfunc) {
-		var jqxhr = $.ajax( {
-			url: _altuibox_url+"/api/variables/"+variable,
-			type: "PUT",
-			cache: false,
-			data: {
-				json:JSON.stringify( { value:value } )
-			},
-		})
-		.done(function(data, textStatus, jqXHR) {
-			if ($.isFunction(cbfunc))
-				(cbfunc)(data);
-		})
-		.fail(function(jqXHR, textStatus, errorThrown) {
-			if ($.isFunction(cbfunc))
-				(cbfunc)(null);
-		})
-		.always(function() {
-		});
-		return jqxhr;
-	};
-	function _getHouseMode(cbfunc) {
-		return _getVariable('Mode',cbfunc);
-	};
-	function _getHouseModeSwitchDelay() {
-		return ( parseInt(_user_data.mode_change_delay || 9) +3);
-	};
-	function _setHouseMode(newmode,cbfunc) {
-		if ((newmode<=4) && (newmode>=1)) {
-			return _setVariable('Mode',newmode,cbfunc);
-		}
-		return null;
-	};
-	function _isUserDataCached() {
-		return MyLocalStorage.get("AltuiBox"+_uniqID)!=null;
-	};
-	function _getDeviceDependants(device) {
-		var usedin_objects =[];
-		var scenes = this.getScenesSync();
-		$.each(scenes,function( idx,scene) {
-			if (scene.triggers)
-				$.each(scene.triggers, function(idx,trigger) {
-					if (trigger.device == device.id) {
-						usedin_objects.push({type:'trigger', scene:scene.altuiid, name:scene.name, trigger:trigger});
-					}
-				});
-			if (scene.groups)
-				$.each(scene.groups, function(idx,group) {
-					$.each(group.actions, function(idx,action) {
-						if (action.device==device.id) {
-							usedin_objects.push({type:'action', scene:scene.altuiid, name:scene.name, action:action});
-						}
-					});
-				});
-		});
-		return usedin_objects;
-	};
-	function _getCategoryTitle(catnum)
-	{
-		return UserDataHelper(_user_data).getCategoryTitle(_user_data,catnum);
-
-	};
-	function _getFileUrl( filename) {
-		return _altuibox_url+"/files/"+filename;
-	};
-	function _getFileContent( filename , cbfunc) {
-		// http://192.168.1.114:3000/files/D_ALTUI.xml
-		var jqxhr = $.ajax( {
-			url: _getFileUrl(filename),
-			type: "GET",
-			cache: false,
-			dataType: "text",
-			processData: false			// prevent jquery to process data to receive it as pure TEXT
-		})
-		.done(function(data, textStatus, jqXHR) {
-			if ($.isFunction(cbfunc))
-				(cbfunc)(data);
-		})
-		.fail(function(jqXHR, textStatus, errorThrown) {
-			AltuiDebug.debug( "http Get for file {0} failed".format( filename ));
-			if ($.isFunction(cbfunc))
-				(cbfunc)(null);
-		})
-		.always(function() {
-		});
-		return jqxhr;
-	};
-	function _getIconPath(iconname) {
-		return "//{0}/images/{1}".format(_ip_addr, iconname);
-	};
-	function _getDeviceActions(device,cbfunc) {
-		return UserDataHelper(_user_data).getDeviceActions(device,cbfunc);
-	};
-
-	function _initializeSysinfo() {
-		return {
-			"installation_number" : "12345678",
-			"firmware_version": "0.1",
-			// "zwave_version" : "4.5",
-			// "zwave_homeid" : "016B4491",
-			// "zwave_locale" : "eu",
-			// "hwaddr": "",
-			// "ergykey": "",
-			// "timezone": "Europe|Brussels|CET-1CEST,M3.5.0,M10.5.0/3",
-			// "Server_Device": "vera-us-oem-device11.mios.com",
-			// "Server_Event": "vera-us-oem-event11.mios.com",
-			// "Server_Relay": "vera-eu-oem-relay12.mios.com",
-			// "Server_Storage": "vera-us-oem-storage11.mios.com",
-			// "Server_Support": "vera-us-oem-ts11.mios.com",
-			// "Server_Log": "vera-us-oem-log11.mios.com",
-			// "Server_Firmware": "vera-us-oem-firmware11.mios.com",
-			// "Server_Event": "vera-us-oem-event11.mios.com",
-			// "Server_Account": "vera-us-oem-account11.mios.com",
-			// "Server_Autha": "vera-us-oem-autha11.mios.com",
-			// "Server_Authd": "vera-us-oem-authd11.mios.com",
-			// "rauser": "",
-			// "rapass": "",
-			// "radisabled": "",
-			// "raemail": "",
-			// "raport": "35837",
-			// "auth_user": "",
-			// "remote_only": "1",
-			// "terminal_disabled": "0",
-			// "failsafe_tunnels": "0",
-			// "3g_wan_failover": "0",
-			// "secure_unit": "0",
-			// "manual_version": "1",
-			"platform": "Altuibox",
-			"full_platform": "Altuibox",
-			"skin": "altui",
-			"language": "1",
-			"ui_language": "en",
-			// "account": ""
-		}
-	};
-
-  // explicitly return public methods when this object is instantiated
-  return {
-	//---------------------------------------------------------
-	// PUBLIC  functions
-	//---------------------------------------------------------
-	getFileUrl		: _getFileUrl,			//(filename)
-	getFileContent	: _getFileContent,
-	getUPnPHelper	: function ()	{ console.assert(false,"Altuibox controller %s does not have a UPNP interface",_ip_addr); return null; } ,
-	getIpAddr		: function ()	{ return _ip_addr; },
-	getUrlHead		: function ()	{ return (_ipaddr=='') ? window.location.pathname : ("http://{0}".format(_ip_addr)); },
-	getDataProviders	: _todo,	// (cbfunc)
-	triggerAltUIUpgrade : _todo,	// (newversion,newtracnum)	: newrev number in TRAC
-	getIconPath		: _getIconPath,		// ( src )
-	getIcon			: _todo,		// workaround to get image from vera box
-	getWeatherSettings : _getWeatherSettings,
-	isUI5			: function()	{return false},
-	isOpenLuup : function()		{return false},
-	getBoxInfo		: _getBoxInfo,				//()
-	getBoxFullInfo	: _getBoxFullInfo,		//()
-	getLuaStartup	: _todo,
-	getRooms		: _getRooms,	// in the future getRooms could cache the information and only call _getRooms when needed
-	getRoomsSync	: _getRoomsSync,
-	getRoomByID		:  _getRoomByID,
-	getDevices		:  _getDevices,
-	getDevicesSync	: function()	{ return _user_data.devices || []; },
-	getDeviceByType : _todo,
-	getDeviceByAltID : _todo,
-	getDeviceByID	: _getDeviceByID,	// devid
-	getDeviceBatteryLevel : _getDeviceBatteryLevel,
-	getDeviceStaticUI : _todo,
-	getDeviceVariableHistory : _todo,
-	getDeviceActions: _getDeviceActions,
-	getDeviceEvents : _todo,
-	getDeviceDependants: _getDeviceDependants,
-	runAction : _runAction,
-	addWatch			: _todo,
-	delWatch			: _todo,
-	getWatches			: _getWatches,
-	isDeviceZwave	: function(device) { return UserDataHelper(_user_data).isDeviceZwave(device) },
-	isDeviceZigbee	: function(device) { return UserDataHelper(_user_data).isDeviceZigbee(device) },
-	isDeviceBT		: function(device) { return UserDataHelper(_user_data).isDeviceBT(device) },
-	getScenes		: _getScenes,
-	getSceneHistory : _todo,
-	getScenesSync	: _getScenesSync,
-	getSceneByID	: _getSceneByID,
-	getNewSceneID	: _getNewSceneID,
-
-	// pages
-	getCustomPages : _todo,
-
-	// worklflows
-	getWorkflows	: _todo,
-	getWorkflowStatus : _todo,
-	getWorkflowHistory: _todo,
-	isWorkflowEnabled : function() {return false},
-	getPlugins		: _todo,
-	getPluginByID	: _todo,
-	getUsers		: _getUsers,
-	getUsersSync	: _getUsersSync,
-	getUserByID		: _getUserByID,
-	getHouseMode	: _getHouseMode,
-	setHouseMode	: _setHouseMode,
-	getHouseModeSwitchDelay : _getHouseModeSwitchDelay,
-	setAttr			: _todo,
-	setStatus		: _todo,
-	getStatus		: _getStatus, //	( deviceid, service, variable )
-	getJobStatus	: _todo,
-	getStates		: _getStates,
-	evaluateConditions :	function (deviceid,cat,subcat,conditions) {
-		return UserDataHelper(_user_data).evaluateConditions(deviceid,cat,subcat,conditions);
-	},
-
-	createDevice	: _todo,
-	deleteDevice	: _todo,
-	renameDevice	: _todo,
-	updateNeighbors	: _todo,
-	createRoom		: _todo,
-	deleteRoom		: _todo,
-	renameRoom		: _todo,
-	runScene		: _todo,
-	editScene		: _todo,
-	renameScene	: _todo,
-	deleteScene		: _todo,
-	modifyDevice	: _todo,
-	modifyPlugin		: _todo,
-	reloadEngine	: _todo,
-	reboot			: _todo,
-	setStartupCode	: _todo,
-
-	getCategoryTitle : _getCategoryTitle,
-	getCategories	 : _getCategories,	//( cbfunc, filterfunc, endfunc ),
-	getDeviceTypes	: _todo,
-
-	// energy
-	getPower		: function (cbfunc) { (cbfunc)("No devices") },
-
-	// color
-	setColor		: _todo,
-
-	// stats
-	resetPollCounters : _todo,
-
-	// oscommand http://192.168.1.16/port_3480/data_request?id=lr_ALTUI_Handler&command=oscommand&oscommand=df
-	osCommand		: _todo,
-	runLua			: _todo,
-
-	// UI5 Compatibility mode: caching user data changes and saving them at user request
-	updateChangeCache : _todo,
-	saveChangeCaches  : _todo,
-	initializeJsonp	  : function () {
-		jsonp={};
-		jsonp.ud =_user_data;
-		return jsonp;
-	},
-	initializeSysinfo : _initializeSysinfo,
-
-	// save page data into altui plugin device
-	saveData		: _todo,
-	saveEngine		: _todo,
-	clearEngine		: _todo,
-	loadEngine		: _todo,
-	isUserDataCached	: _isUserDataCached,
-	initEngine		:	_initEngine,
-	RequestBackup : _todo
-  };
-});	// not invoked, object does not exists

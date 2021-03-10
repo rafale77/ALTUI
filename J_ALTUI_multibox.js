@@ -43,7 +43,7 @@ var MultiBox = ( function( window, undefined ) {
 		var arr = _controllers.filter( function(c) {
 			return (required_feature==null ) || ( $.isFunction(c.controller[required_feature])==true )
 		})
-		return $.map(arr,function(c) { return {	ip:c.ip , name:c.name, box_info:c.controller.getBoxFullInfo(), controller: c.controller } });
+		return arr; //$.map(arr,function(c) { return {	ip:c.ip , name:c.name, box_info:c.controller.getBoxFullInfo(), controller: c.controller } });
 	};
 	function _initDB(devicetypes) {
 		$.extend(true,_devicetypesDB[0],devicetypes);	// data received initially comes from ctrl 0
@@ -64,6 +64,7 @@ var MultiBox = ( function( window, undefined ) {
 		return $.extend(true,_devicetypesDB[id][devtype],obj);
 	};
 	function _updateDeviceTypeUPnpDB( controllerid, devtype, Dfilename )	{
+		var dfd = $.Deferred();
 		var id = controllerid || 0;
 		if (_devicetypesDB[id][devtype]==null)
 			_devicetypesDB[id][devtype]={};
@@ -91,13 +92,18 @@ var MultiBox = ( function( window, undefined ) {
 							Actions : []
 						});
 					});
+					dfd.resolve(true);
 				}
 				catch(e) {
 					console.log("error in xml parsing, Dfile:"+Dfilename);
 					console.log("xmlstr"+xmlstr);
+					dfd.reject()
 				}
 			});
+		} else {
+			dfd.resolve(true);	
 		}
+		return dfd.promise()
 	};
 	function _updateDeviceTypeUIDB(controllerid, devtype, ui_definitions)	{
 		if (_devicetypesDB[controllerid]==null) {
@@ -141,13 +147,7 @@ var MultiBox = ( function( window, undefined ) {
 	};
 
 	function _initEngine(extraController,firstuserdata, maincontrollertype) {
-
-		function _AllLoaded(eventname) {
-			// case "on_ui_userDataLoaded":
-			// case "on_ui_userDataFirstLoaded":
-			// console.log("All loaded : ",eventname);
-			EventBus.publishEvent(eventname);
-		};
+		var dfd = $.Deferred();
 
 		// initialize controller 0 right away, no need to wait
 		maincontrollertype = maincontrollertype || "V";
@@ -158,9 +158,9 @@ var MultiBox = ( function( window, undefined ) {
 			controller:null
 		};
 		switch(newcontroller.type) {
-			case "A":
-				newcontroller.controller = new AltuiBox(0,'');		// create the main controller
-				break;
+			// case "A":
+			// 	newcontroller.controller = new AltuiBox(0,'');		// create the main controller
+			// 	break;
 			case "V":
 			default:
 				newcontroller.controller = new VeraBox(0,'');		// create the main controller
@@ -171,7 +171,6 @@ var MultiBox = ( function( window, undefined ) {
 		// add the extra controllers
 		if (extraController.trim().length>0) {
 			$.each(extraController.split(','), function(idx,ctrlinfo) {
-				ctrlinfo = ctrlinfo;
 				var splits = ctrlinfo.trim().split("-");
 				var newcontroller = {
 					ip:splits[0],
@@ -180,9 +179,9 @@ var MultiBox = ( function( window, undefined ) {
 					controller:null
 				}
 				switch (newcontroller.type) {
-					case 'A':
-						newcontroller.controller = new AltuiBox(1+idx,newcontroller.ip);
-						break;
+					// case 'A':
+					// 	newcontroller.controller = new AltuiBox(1+idx,newcontroller.ip);
+					// 	break;
 					case 'V':
 					default:
 						newcontroller.controller = new VeraBox(1+idx,newcontroller.ip);
@@ -195,17 +194,7 @@ var MultiBox = ( function( window, undefined ) {
 			});
 		}
 
-		if (g_ALTUI.g_MachineLearning == '1') {
-			_controllers.push( {
-				ip:'',
-				type:"Z",				// machine learning controller
-				name:'Machine Learning',
-				controller:new LearnBox(_controllers.length)
-			});
-		}
-
 		// prepare to wait for proper initialization
-		// EventBus.waitForAll( "on_ui_userDataFirstLoaded", _getAllEvents("on_ui_userDataFirstLoaded"), this, _AllLoaded );
 		EventBus.waitForAll("on_ui_userDataLoaded", _getAllEvents("on_ui_userDataLoaded"), this, null , g_ALTUI.g_CtrlTimeout )
 		.always( function(data) {
 			// check data , if a controller is missing, disable it
@@ -230,7 +219,8 @@ var MultiBox = ( function( window, undefined ) {
 					console.log("Cannot disable main controller, trying to continue...")
 				}
 			})
-			_AllLoaded( "on_ui_userDataLoaded" )
+			EventBus.publishEvent("on_ui_userDataLoaded");
+			dfd.resolve(true)
 		})
 
 		// now start the engine
@@ -238,6 +228,7 @@ var MultiBox = ( function( window, undefined ) {
 			box.controller.initEngine( (idx==0) ? firstuserdata : null );		// will raise("on_ui_userDataFirstLoaded_"+_uniqID) ("on_ui_userDataLoaded_"+_uniqID)
 		});
 
+		return dfd.promise();
 	};
 	
 	function _stopEngine(controller) {
@@ -582,6 +573,10 @@ var MultiBox = ( function( window, undefined ) {
 		var elems = device.altuiid.split("-");
 		return (_controllers[elems[0]]==undefined)	? null : _controllers[elems[0]].controller.isDeviceBT(device);
 	};
+	function _isDeviceBattery(device) {
+		var level = MultiBox.getDeviceBatteryLevel(device)
+		return (level!=null)
+	};
 	function _updateNeighbors(device) {
 		var elems = device.altuiid.split("-");
 		return (_controllers[elems[0]]==undefined)	? null : _controllers[elems[0]].controller.updateNeighbors(elems[1]);
@@ -735,6 +730,9 @@ var MultiBox = ( function( window, undefined ) {
 	function _getWorkflows(cbfunc) {
 		return _controllers[0].controller.getWorkflows(cbfunc);
 	};
+	function _forceRefreshWorkflows(cbfunc) {
+		return _controllers[0].controller.forceRefreshWorkflows(cbfunc);
+	};
 	function _getCustomPages(cbfunc) {
 		return _controllers[0].controller.getCustomPages(cbfunc);
 	}
@@ -841,6 +839,15 @@ var MultiBox = ( function( window, undefined ) {
 		});
 		return dfd.promise();
 	};
+	function _enableCORS(controller, bEnable, cbfunc) {
+		return _controllers[controller].controller.enableCORS(bEnable,cbfunc);
+	}
+	function _enableNightlyHeal(controller, bEnableOrNull,  cbfunc) {
+		return _controllers[controller].controller.enableNightlyHeal(bEnableOrNull, cbfunc);
+	}
+	function _candoCORS(controller) {
+		return _controllers[controller].controller.candoCORS();
+	}
 	function _isUserDataCached(controllerid) {
 		var id = controllerid || 0;
 		return _controllers[id].controller.isUserDataCached();
@@ -849,9 +856,13 @@ var MultiBox = ( function( window, undefined ) {
 		var id = controllerid || 0;
 		return _controllers[id].controller.getIconPath( iconname );
 	};
-	function _getIcon( controllerid, imgpath , cbfunc ) {
+	function _getIconContent( controllerid, imgpath , cbfunc ) {
 		var id = controllerid || 0;
-		return _controllers[id].controller.getIcon( imgpath , cbfunc );
+		return _controllers[id].controller.getIconContent( imgpath , cbfunc );
+	};
+	function _loadIcon( controllerid, imgpath , cbfunc ) {
+		var id = controllerid || 0;
+		return _controllers[id].controller.loadIcon( imgpath , cbfunc );
 	};
 	function _triggerAltUIUpgrade(newversion,newtracnum) {
 		return _controllers[0].controller.triggerAltUIUpgrade(newversion,newtracnum);
@@ -917,6 +928,7 @@ var MultiBox = ( function( window, undefined ) {
 	isRemoteAccess	: function()	{	return window.location.href.indexOf("mios.com")!=-1; /*return true;*/ },
 	getBoxInfo		: function( ctrlid )	{	return _controllers[ctrlid || 0].controller.getBoxInfo(); },
 	getBoxFullInfo	: function( ctrlid )	{	return _controllers[ctrlid || 0].controller.getBoxFullInfo(); },
+	getMajorMinor	: function( ctrlid )	{	return _controllers[ctrlid || 0].controller.getMajorMinor(); },
 	getHouseMode	: function(cb)	{	return _controllers[0].controller.getHouseMode(cb); },		// (cbfunc)
 	setHouseMode	: _setHouseMode,		// (newmode,cbfunc)
 	getHouseModeSwitchDelay : _getHouseModeSwitchDelay,
@@ -971,6 +983,7 @@ var MultiBox = ( function( window, undefined ) {
 	isDeviceZwave			: _isDeviceZwave,			// (device)
 	isDeviceZigbee			: _isDeviceZigbee,			// (device)
 	isDeviceBT				: _isDeviceBT,				// (device)
+	isDeviceBattery			: _isDeviceBattery,			// (device)
 	updateNeighbors			: _updateNeighbors,			// (device)
 	modifyDevice		: _modifyDevice,
 
@@ -1008,6 +1021,7 @@ var MultiBox = ( function( window, undefined ) {
 	getWorkflows		: _getWorkflows,
 	getWorkflowStatus	: _getWorkflowStatus,
 	getWorkflowHistory	: _getWorkflowHistory,
+	forceRefreshWorkflows: _forceRefreshWorkflows,
 	isWorkflowEnabled	: _isWorkflowEnabled,
 
 	// pages
@@ -1041,8 +1055,12 @@ var MultiBox = ( function( window, undefined ) {
 	getPower			: _getPower,			//(cbfunc)
 	resetPollCounters	: _resetPollCounters,	//()	!  promise API
 	isUserDataCached	: _isUserDataCached,	//()
+	enableNightlyHeal	: _enableNightlyHeal,	//(controller, bEnableOrNull)
+	enableCORS			: _enableCORS,			//(controller, bEnable, cbfunc)
+	candoCORS			: _candoCORS,			//(controller)
 	getIconPath			: _getIconPath,			// (device,str)
-	getIcon				: _getIcon,				// ( controllerid, imgpath , cbfunc )
+	getIconContent		: _getIconContent,				// ( controllerid, imgpath , cbfunc )
+	loadIcon			: _loadIcon,			//
 	// buildUPnPGetFileUrl : _buildUPnPGetFileUrl,	// (name)
 
 	// Upgrade

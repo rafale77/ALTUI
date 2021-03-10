@@ -1,3 +1,4 @@
+-- // Plugin ALTUI
 -- // This program is free software: you can redistribute it and/or modify
 -- // it under the condition that it is for private or home useage and
 -- // this whole comment is reproduced in the source code file.
@@ -9,8 +10,9 @@
 local MSG_CLASS = "ALTUI"
 local ALTUI_SERVICE = "urn:upnp-org:serviceId:altui1"
 local devicetype = "urn:schemas-upnp-org:device:altui:1"
-local version = "v2.42b"
-local SWVERSION = "3.3.1"	-- "2.2.4"
+local version = "v2.53b"
+local SWVERSION = "3.5.1" -- "3.4.1" -- "3.3.1"	-- "2.2.4"
+local BOOTSTRAPVERSION = "4.5.3" 
 local UI7_JSON_FILE= "D_ALTUI_UI7.json"
 local ALTUI_TMP_PREFIX = "altui-"
 local ALTUI_SONOS_MP3 = ALTUI_TMP_PREFIX .. "sonos.mp3"
@@ -20,6 +22,8 @@ local THINGSPEAK_PUSH_SEC = 15	-- thingspeak limits
 local this_device = nil
 local DEBUG_MODE = false	-- controlled by UPNP action
 local WFLOW_MODE = false	-- controlled by UPNP action
+local REMOTEACCESS_URL = "https://bpspec.com/altui/Veralogin.php"
+
 local json = require("dkjson")
 if (type(json) == "string") then
 	luup.log("ALTUI warning dkjson missing, falling back to L_ALTUIjson", 2)
@@ -52,7 +56,8 @@ local WorkflowTriggers = {}			-- array of workflow triggers ( waiting for a work
 
 -- local strWorkflowDescription = ""
 local strWorkflowTransitionTemplate = "Wkflow - Workflow: %s, Valid Transition found:%s, Active State:%s=>%s"	-- needed for ALTUI grep & history log feature
-local Timers = {}					-- to Persist timers accross VERA reboots
+local Timers = {}					-- to Persist timers across VERA reboots
+local TimersDisabled = {} 			-- octo - flag to stop interrupts from clearing timer 
 local ReceivedData = {}				-- buffer for receiving split data chunks
 
 --calling a function from HTTP in the device context
@@ -214,7 +219,7 @@ local function table2params(workflowaltuiid,args)
 	return result
 end
 
-Queue = {
+local Queue = {
 	new = function(self,o)
 		o = o or {}	  -- create object if user does not provide one
 		setmetatable(o, self)
@@ -470,8 +475,10 @@ local function addWorkflowTrigger( lul_device, altuiid, state, listener_altuiid,
 end
 
 local function removeWorkflowTrigger( lul_device, listener_altuiid )
+
 	debug(string.format("removeWorkflowTrigger(%s,%s)",lul_device,	listener_altuiid ))
 	WorkflowTriggers[listener_altuiid]=nil
+
 end
 
 local function getWorkflowTriggeredBy( lul_device, altuiid, state )
@@ -501,7 +508,7 @@ local function _addWatch( service, variable, devid, scene, expression, xml, prov
 	debug(string.format("_addWatch(%s,%s,%s,%s,%s,%s,%s,%s)",service, variable, devid, scene, expression, xml or "", provider or "", json.encode(providerparams or "")))
 	local data = json.encode(providerparams)
 	local result = 1
-	devidstr = tostring(devid)	 -- to inssure it is not a indexed array , but hash table
+	local devidstr = tostring(devid)	 -- to inssure it is not a indexed array , but hash table
 	local parts = devidstr:altui_split("-")
 	if (parts[2]==nil) then
 		devidstr = "0-"..devidstr
@@ -557,24 +564,25 @@ local function _addWatch( service, variable, devid, scene, expression, xml, prov
 			}
 			if (DataProviders[provider]==nil) or ( data=="" )  then
 				warning(string.format("Unknown data push provider:%s or data:%s",provider or"", data or ""))
-			end
-			if (registeredWatches[devidstr][service][variable]['DataProviders'] == nil) then
-				registeredWatches[devidstr][service][variable]['DataProviders']={}
-			end
-			if (registeredWatches[devidstr][service][variable]['DataProviders'][provider] == nil) then
-				registeredWatches[devidstr][service][variable]['DataProviders'][provider]={}
-			end
-			local n2 = tablelength(registeredWatches[devidstr][service][variable]['DataProviders'][provider])
-			local bFound = false
-			for i=1,n2 do
-				if (registeredWatches[devidstr][service][variable]['DataProviders'][provider][i]['Data']==data) then
-					bFound = true
+			else
+				if (registeredWatches[devidstr][service][variable]['DataProviders'] == nil) then
+					registeredWatches[devidstr][service][variable]['DataProviders']={}
 				end
-			end
-			if (bFound==false) then
-				registeredWatches[devidstr][service][variable]['DataProviders'][provider][n2+1] = {
-					['Data']=data
-				}
+				if (registeredWatches[devidstr][service][variable]['DataProviders'][provider] == nil) then
+					registeredWatches[devidstr][service][variable]['DataProviders'][provider]={}
+				end
+				local n2 = tablelength(registeredWatches[devidstr][service][variable]['DataProviders'][provider])
+				local bFound = false
+				for i=1,n2 do
+					if (registeredWatches[devidstr][service][variable]['DataProviders'][provider][i]['Data']==data) then
+						bFound = true
+					end
+				end
+				if (bFound==false) then
+					registeredWatches[devidstr][service][variable]['DataProviders'][provider][n2+1] = {
+						['Data']=data
+					}
+				end
 			end
 		else
 			local bFound = false
@@ -841,6 +849,20 @@ local function getWorkflowsDescr(lul_device)
 		end
 
 	end
+	
+	-- unpacking the graph json for all
+	for k,v in pairs(workflows) do
+		local status,results = pcall( json.decode, v["graph_json"])
+		if (status==true) then
+			workflows[k]["graph_json"] = results
+		else
+			error(string.format("Wkflow - initWorkflows fails to decode graph string for workflow %s", v.altuiid ))
+			workflows[k]["graph_json"] = {
+				cells={}
+			}
+		end
+	end
+	
 	debug(string.format("Wkflow - getWorkflowsDescr returning %s",	json.encode(workflows)	))
 	return workflows
 end
@@ -987,18 +1009,9 @@ local function initWorkflows(lul_device,pendingReset)
 	debug(string.format("Wkflow - WorkflowsActiveState = %s",json.encode(WorkflowsActiveState)))
 
 	Workflows = getWorkflowsDescr(lul_device)
+
 	-- decode the graph json which is stored as a string inside the string
 	for k,v in pairs(Workflows) do
-
-		local status,results = pcall( json.decode, Workflows[k]["graph_json"])
-		if (status==true) then
-			Workflows[k]["graph_json"] = results
-		else
-			error(string.format("Wkflow - initWorkflows fails to decode graph string for workflow %s", Workflows[k].altuiid ))
-			Workflows[k]["graph_json"] = {
-				cells={}
-			}
-		end
 
 		if (WorkflowsVariableBag[Workflows[k].altuiid]==nil) then
 			WorkflowsVariableBag[Workflows[k].altuiid] = {}
@@ -1149,11 +1162,12 @@ local function evaluateStateTransition(lul_device,link, workflow_idx, watchevent
 		return true
 	end
 	-- otherwise check if timer expired
-	if (link.prop.timer ~= "") then
+	if (link.prop.timer ~= "") and TimersDisabled[workflow_idx] == false then --octo, ignore timer expiry if in the process of enabling them
 		debug(string.format("Wkflow - link has a timer."))
-		local res = link.prop.expired
-		link.prop.expired = false
+		local res = link.prop.expired 
+		link.prop.expired = false  
 		if (res==true) then
+			debug(string.format("Wkflow - link had expired."))  -- octo
 			return true
 		end
 	end
@@ -1199,23 +1213,11 @@ local function evaluateStateTransition(lul_device,link, workflow_idx, watchevent
 			old = old or ""
 			new = new or ""
 			local results = _evaluateUserExpression(lul_device,devid, cond.service, cond.variable,old,new,lastupdate,cond.luaexpr,workflow_idx)
-			-- if (bMatchingWatch==true) then
-				-- watchevent.watch['Expressions']['results'][cond.luaexpr]["LastEval"] = results[1]
-				-- debug(string.format("Wkflow - setting watch results to %s",json.encode(watchevent.watch['Expressions']['results'][cond.luaexpr])))
-			-- end
 
 			local res,delay = results[1], results[2] or nil
 			if (  res ~= true) then
 				return false
 			end
-
-			-- if (cond.triggeronly == true) then
-				-- debug(string.format("Wkflow - watchevent for workflow was:%s",json.encode(watchevent.watch['Expressions']['results'])))
-				-- if (watchevent.watch['Expressions']['results'][cond.luaexpr]["LastEval"] == watchevent.watch['Expressions']['results'][cond.luaexpr]["OldEval"]) then
-					-- debug("Wkflow - Watch expression value is the same as before, ignoring the trigger & return false")
-					-- return false
-				-- end
-			-- end
 		end
 		return true	-- logical AND of all expressions
 	end
@@ -1286,13 +1288,13 @@ end
 local function nextWorkflowState(lul_device,workflow_idx,oldstate, newstate,comment)
 	if (WFLOW_MODE==true) and (newstate.id ~= oldstate.id ) then
 		log(string.format(strWorkflowTransitionTemplate, Workflows[workflow_idx].altuiid, comment or "", getCellName(oldstate), getCellName(newstate)));
-		-- debug(string.format("Wkflow - Workflow:'%s' nextWorkflowState(%s, %s ==> %s) ", Workflows[workflow_idx].name,Workflows[workflow_idx].altuiid, oldstate.attrs.text.text,newstate.attrs.text.text))
 
 		-- cancel timers originated from that state
 		cancelStateTimers(lul_device,workflow_idx,oldstate.id)
 		removeWorkflowTrigger(lul_device,Workflows[workflow_idx].altuiid)
 
 		-- execute onExit of old state
+		TimersDisabled[workflow_idx] = true -- octo - stop timers getting cleared as they are currently expired
 		executeStateLua(lul_device,workflow_idx,oldstate,"onExitLua")
 		executeStateActions(lul_device,workflow_idx,oldstate,"onExit")
 		executeStateScenes(lul_device,workflow_idx,oldstate,"onExitScenes")
@@ -1305,6 +1307,7 @@ local function nextWorkflowState(lul_device,workflow_idx,oldstate, newstate,comm
 		executeStateActions(lul_device,workflow_idx,newstate,"onEnter")
 		executeStateScenes(lul_device,workflow_idx,newstate,"onEnterScenes")
 		armLinkTransitions(lul_device,workflow_idx,newstate)
+		TimersDisabled[workflow_idx] = false --octo - timers are now running
 
 		-- execute all other workflows triggered by that new state
 		local to_launch = getWorkflowTriggeredBy( lul_device, Workflows[workflow_idx].altuiid, newstate.id )
@@ -1340,7 +1343,7 @@ local function evalWorkflowState(lul_device, workflow_idx, watchevent )
 
 	local evalstartcond = evaluateStateTransition(lul_device,start,workflow_idx,watchevent)
 	local blocked = Workflows[workflow_idx].blocked or Workflows[workflow_idx].paused	-- blocked by start conditions or by user request
-	debug(string.format("Wkflow - blocked:%s, paused:%s", tostring(Workflows[workflow_idx].blocked or ''), tostring(Workflows[workflow_idx].paused or '')))
+	debug(string.format("Wkflow - blocked:%s, paused:%s", tostring(Workflows[workflow_idx].blocked or false), tostring(Workflows[workflow_idx].paused or false))) --octo
 
 	if (blocked==true) then
 		if (evalstartcond==true) then
@@ -1389,7 +1392,7 @@ local function evalWorkflowState(lul_device, workflow_idx, watchevent )
 				cancelTimer( table.concat(tbl, "#") )
 			end
 
-			-- log(string.format(strWorkflowTransitionTemplate, Workflows[workflow_idx].altuiid, link.labels[1].attrs.text.text, oldstate.attrs.text.text, targetstate.attrs.text.text));
+			debug(string.format(strWorkflowTransitionTemplate, Workflows[workflow_idx].altuiid, link.labels[1].attrs.text.text, oldstate.attrs.text.text, targetstate.attrs.text.text)); --Octo
 			nextWorkflowState( lul_device, workflow_idx, oldstate, targetstate , getCellName(link))
 			return true;	-- todo
 		end
@@ -1414,7 +1417,7 @@ function workflowTimerCB(lul_data)
 		-- is timer obsolete ?
 		-- are we still in the same state ?
 		local active_state = Workflows[workflow_idx]["graph_json"].active_state		-- id of active state
-		debug(string.format("Wkflow - %s, active state:%s timerstate:%s",Workflows[workflow_idx].name,active_state,timerstateid))
+		debug(string.format("Wkflow - %s, active state:%s timerstate:%s",Workflows[workflow_idx].name,active_state or 'nil',timerstateid or 'nil'))
 		if (active_state == timerstateid) then
 			-- if yes, execute link transition
 			local cells = Workflows[workflow_idx]["graph_json"].cells
@@ -1638,7 +1641,7 @@ end
 
 function clearAltuiFile(param)
 	if (string.len(param)>0) then
-		os.execute("rm /www/"..param)
+		os.execute("rm /www/altui/"..param)
 	end
 end
 
@@ -1876,22 +1879,25 @@ local htmlAltuiScripts = [[
 -- <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/jointjs/1.0.3/joint.shapes.fsa.min.js"></script>
 -- <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/jointjs/1.0.3/joint.shapes.devs.min.js"></script>
 
+-- %s to inject bootstrap verion
+local htmlBootstrapScript = [[	
+	<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/bootstrap@%s/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
+]]
 
 local htmlScripts = [[
-	<script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/@swversion@/jquery.min.js" ></script>
-	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.4/lodash.min.js"></script>
-	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/backbone.js/1.3.3/backbone-min.js"></script>
+	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/@swversion@/jquery.min.js" ></script>
+	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.14/lodash.min.js"></script>
+	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/backbone.js/1.4.0/backbone-min.js"></script>
 	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.5/umd/popper.js" ></script>
-	<script type="text/javascript" src="//maxcdn.bootstrapcdn.com/bootstrap/4.1.3/js/bootstrap.min.js" crossorigin="anonymous"></script>
+@bootstrapscript@
 	<script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js" ></script>
 	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery-bootgrid/1.3.1/jquery.bootgrid.min.js" defer></script>
 	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/spectrum/1.8.0/spectrum.min.js"></script>
 	<script type="text/javascript" src="https://cdn.jsdelivr.net/raphael/2.1.4/raphael-min.js"></script>
-	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.3/ace.js"></script>
+	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.7/ace.js"></script>
 	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/justgage/1.2.9/justgage.min.js"></script>
 	<script type="text/javascript" src='//www.google.com/jsapi?autoload={"modules":[{"name":"visualization","version":"1","packages":["gauge","table"]}]}' >
 	</script>
-
 ]]
 
 	-- <script src="J_ALTUI_b_blockly_compressed.js" defer ></script>
@@ -1905,7 +1911,9 @@ local htmlStyle = [[
 	</style>
 ]]
 
-local defaultBootstrapPath = "//maxcdn.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css"
+--https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css
+--local defaultBootstrapPath = "//maxcdn.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css"
+local defaultBootstrapPath = "https://cdn.jsdelivr.net/npm/bootstrap@%s/dist/css/bootstrap.min.css"
 
 -- WARNING: put the proper class name to work with the UIManager preload check. '.' are replaced by '_'
 local htmlLocalCSSlinks = [[
@@ -2007,7 +2015,6 @@ local htmlLayout = [[
 			 g_Options : '@ServerOptions@',
 			 g_CtrlOptions : '@ctrloptions@',
 			 g_DeviceTypes :  JSON.parse('@devicetypes@'),
-			 g_MachineLearning : '@machinelearning@',
 			 g_CtrlTimeout : '@ctrltimeout@',
 			 //g_CustomPages : @custompages@,
 			 //g_Workflows : @workflows@
@@ -2294,12 +2301,21 @@ local function GoogleAuthCallback(command,lul_device)
 	return _helperGoogleAuthCallback(url,lul_device)
 end
 
+function refreshWorkflows(lul_device)
+	debug('refreshWorkflows: for '.. lul_device)
+	lul_device = tonumber(lul_device)
+	Workflows = getWorkflowsDescr(lul_device) 
+	return true
+end
+
 function myALTUI_Handler(lul_request, lul_parameters, lul_outputformat)
 	debug('myALTUI_Handler: request is: '..tostring(lul_request))
 	debug('myALTUI_Handler: parameters is: '..json.encode(lul_parameters))
 	-- debug('ALTUI_Handler: outputformat is: '..json.encode(lul_outputformat))
 	local lul_html = "";	-- empty return by default
 	local mime_type = "";
+	local command
+	
 	-- debug("hostname="..hostname)
 	if (hostname=="") then
 		hostname = getIP()
@@ -2406,13 +2422,15 @@ function myALTUI_Handler(lul_request, lul_parameters, lul_outputformat)
 				local serverOptions= getSetVariable(ALTUI_SERVICE, "ServerOptions", deviceID, "")
 				local localcdn = getSetVariable(ALTUI_SERVICE, "LocalCDN", deviceID, "")
 				local altuipath = getSetVariable(ALTUI_SERVICE, "ALTUIPath", deviceID, "")
-				local swversion = getSetVariable(ALTUI_SERVICE, "SWVersion", deviceID, SWVERSION)
+				local tmp_swversion = getSetVariable(ALTUI_SERVICE, "SWVersion", deviceID, SWVERSION.."/"..BOOTSTRAPVERSION)
+				local parts = tmp_swversion:altui_split("/")
+				local swversion = parts[1] or SWVERSION
+				local bootstrapversion  = parts[2] or BOOTSTRAPVERSION
 				local favicon = getSetVariable(ALTUI_SERVICE, "FavIcon", deviceID, "/favicon.ico")
-				local machinelearning = getSetVariable(ALTUI_SERVICE, "EnableMachineLearning", lul_device, 0)
 				local ctrltimeout = getSetVariable(ALTUI_SERVICE, "ControlTimeout", lul_device, DEFAULT_TIMEOUT)
 				local localbootstrap = getSetVariable(ALTUI_SERVICE, "LocalBootstrap", deviceID, "")
 				if (localbootstrap == "") then
-					localbootstrap=defaultBootstrapPath
+					localbootstrap=string.format(defaultBootstrapPath,bootstrapversion)
 				end
 				if (localcdn=="~") then
 					localcdn=""
@@ -2425,9 +2443,9 @@ function myALTUI_Handler(lul_request, lul_parameters, lul_outputformat)
 				variables["localcdn"] = localcdn
 				variables["altuipath"] = altuipath
 				variables["swversion"] = swversion
+				variables["bootstrapscript"] = string.format(htmlBootstrapScript,bootstrapversion)
 				variables["favicon"] = favicon
 				variables["ctrltimeout"] = ctrltimeout
-				variables["machinelearning"] = machinelearning
 				variables["localbootstrap"] = localbootstrap
 				variables["devicetypes"] = json.encode(tbl)
 				-- variables["custompages"] = "["..table.concat(result_tbl, ",").."]"
@@ -2667,8 +2685,15 @@ function myALTUI_Handler(lul_request, lul_parameters, lul_outputformat)
 				return	json.encode(WorkflowsVariableBag), "application/json"
 			end,
 		["getWorkflows"] =
-			function(params)	-- return the data providers database in JSON
+			function(params)	
+				--Workflows = getWorkflowsDescr(lul_device) -- this hangs lua,  too many thread probably at this point.
 				return	json.encode(Workflows), "application/json"
+			end,
+		["refreshWorkflows"] =
+			function(params)	
+				local result = luup.call_delay("refreshWorkflows",1, deviceID)
+				--Workflows = getWorkflowsDescr(lul_device) -- this hangs lua,  too many thread probably at this point.
+				return	json.encode( (result==0) and "success" or "failure" ), "application/json"
 			end,
 		["getCustomPages"]=
 			function(params)
@@ -2885,6 +2910,10 @@ local function getDefaultConfig()
 		["StyleFunc"]="ALTUI_PluginDisplays.getStyle",
 		-- ["ControlPanelFunc"]="ALTUI_PluginDisplays.drawBinLightControlPanel",
 	}
+	tbl["urn:schemas-micasaverde-com:device:WaterValve:1"]= {
+                ["ScriptFile"]="J_ALTUI_plugins.js",
+                ["DeviceDrawFunc"]="ALTUI_PluginDisplays.drawWaterValve",
+        }
 	tbl["urn:schemas-micasaverde-com:device:G550Siren:1"]= {
 		["ScriptFile"]="J_ALTUI_plugins.js",
 		["DeviceDrawFunc"]="ALTUI_PluginDisplays.drawVeraSecure",
@@ -3205,6 +3234,10 @@ local function getDefaultConfig()
 		["ScriptFile"]="J_ALTUI_plugins.js",
 		["DeviceDrawFunc"]="ALTUI_PluginDisplays.drawAltDenon"
 	}
+	tbl["urn:schemas-upnp-org:device:VClock:1"]= {
+		["ScriptFile"]="J_ALTUI_plugins.js",
+		["DeviceDrawFunc"]="ALTUI_PluginDisplays.drawVClock"
+	}
 	return tbl
 end
 
@@ -3510,10 +3543,9 @@ function resetDevice(lul_device,reload)
 	luup.variable_set(ALTUI_SERVICE, "WorkflowsActiveState", json.encode(WorkflowsActiveState), lul_device)
 	luup.variable_set(ALTUI_SERVICE, "WorkflowsVariableBag", json.encode(WorkflowsVariableBag), lul_device)
 	luup.variable_set(ALTUI_SERVICE, "Timers", "", lul_device)
-	-- setVariableIfChanged(ALTUI_SERVICE, "EmonCmsUrl", "https://emoncms.org", lul_device)
-	-- setVariableIfChanged(ALTUI_SERVICE, "RemoteAccess", "https://remotevera.000webhostapp.com/veralogin.php", lul_device)
-	setVariableIfChanged(ALTUI_SERVICE, "RemoteAccess", "https://hirwatech.com/veralogin/Veralogin.php", lul_device)
-	setVariableIfChanged(ALTUI_SERVICE, "SWVersion", SWVERSION, lul_device)
+	setVariableIfChanged(ALTUI_SERVICE, "RemoteAccess", REMOTEACCESS_URL, lul_device)
+	-- default jquery and bootstrap version
+	setVariableIfChanged(ALTUI_SERVICE, "SWVersion", SWVERSION .. "/" .. BOOTSTRAPVERSION, lul_device)
 
 	if (reload==true) then
 		debug("Forcing a Luup reload")
@@ -3549,8 +3581,8 @@ local function createMP3file(lul_device,newMessage)
 		return nil
 	end
 
-	local filename = "/www/"..ALTUI_TMP_PREFIX..math.random(1,100000)..".mp3"
-	-- local filename = "/www/"..ALTUI_SONOS_MP3
+	local filename = "/www/altui/"..ALTUI_TMP_PREFIX..math.random(1,100000)..".mp3"
+	-- local filename = "/www/altui/"..ALTUI_SONOS_MP3
 	local f,errmsg,errno = io.open(filename, "wb")
 	if (f==nil) then
 		error(string.format("ALTUI could not open the file %s in wb mode. check path & permissions. msg:%s",ALTUI_SONOS_MP3,errmsg))
@@ -3560,10 +3592,10 @@ local function createMP3file(lul_device,newMessage)
 	f:close()
 	
 	-- remove /www/ from filename
-	local cleanfilename = filename:gsub('/www/','')
+	local cleanfilename = filename:gsub('/www/altui/','')
 	-- schedule a cleanup in 15 min ( or in reload )
 	luup.call_delay("clearAltuiFile", 15*60, cleanfilename)
-	return string.format("http://%s/%s",hostname,cleanfilename) , mp3Duration(filename)
+	return string.format("http://%s/altui/%s",hostname,cleanfilename) , mp3Duration(filename)
 end
 
 function sayTTS(lul_device,newMessage,volume,groupDevices,durationMs)
@@ -3571,7 +3603,7 @@ function sayTTS(lul_device,newMessage,volume,groupDevices,durationMs)
 	newMessage = modurl.escape( newMessage or "" )
 	volume = volume or 0
 	groupDevices = groupDevices or ""
-	log(string.format("sayTTS(%d,%s,%d,%s)",lul_device, newMessage,volume,groupDevices))
+	log(string.format("sayTTS(%d,%s,%s,%s)",lul_device, newMessage,volume,groupDevices))
 
 	local uri = string.starts(newMessage,"http") and newMessage or createMP3file(lul_device,newMessage)
 	local resultCode, resultString, job, returnArguments
@@ -3615,7 +3647,7 @@ function UPNPregisterDataProvider(lul_device, newName, newUrl, newJsonParameters
 		registerDataProvider(newName, nil, nil, newUrl, obj )
 		return 1
 	end
-	warning("invalid json parameters, %s",newJsonParameters);
+	warning(string.format("invalid json parameters, %s",newJsonParameters));
 	return 0
 end
 
@@ -3728,9 +3760,9 @@ function _evaluateUserExpression(lul_device, devid, lul_service, lul_variable,ol
 				WorkflowsVariableBag[ Workflows[opt_wkflowidx].altuiid ] = env.Bag
 				setVariableIfChanged(ALTUI_SERVICE, "WorkflowsVariableBag", json.encode(WorkflowsVariableBag), lul_device)
 			end
-			debug(string.format("Evaluation of user watch expression returned: %s",json.encode(results)))
+			debug(string.format("Evaluation: user expression %s returned: %s",expr,json.encode(results)))
 		else
-			debug(string.format("Exception occured, Err Msg: %s",results))
+			warning(string.format("Evaluation: user expression %s -- Exception occured: %s",expr,results))
 			results = { false }
 		end
 	end
@@ -3812,7 +3844,7 @@ function evaluateExpression(watch,lul_device, lul_service, lul_variable,expr,old
 			end
 		end
 	end
-	debug(string.format("evaluateExpression() returns %s",tostring(res)))
+	debug(string.format("evaluateExpression(%s) returns %s",expr,tostring(res)))
 	return res
 end
 
@@ -4231,7 +4263,7 @@ function registerHandlers(lul_device)
 				errcode=1
 		end
 		printResult = table.concat (printResult, "\n")
-		return string.format("%d||%s||%s",errcode,tostring(results),printResult);
+		return string.format("%d||%s||%s",errcode,pretty(results),printResult);
 	end
 	luup.register_handler('ALTUI_LuaRunHandler','ALTUI_LuaRunHandler')
 	]]
@@ -4326,7 +4358,8 @@ function startupDeferred(lul_device)
 	local localurl = getSetVariableIfEmpty(ALTUI_SERVICE,"LocalHome", lul_device, url_req)
 	local present = getSetVariable(ALTUI_SERVICE,"Present", lul_device, 0)
 	-- local remoteurl =getSetVariable(ALTUI_SERVICE,"RemoteAccess", lul_device, "https://remotevera.000webhostapp.com/veralogin.php")
-	local remoteurl =getSetVariable(ALTUI_SERVICE,"RemoteAccess", lul_device, "https://hirwatech.com/veralogin/Veralogin.php")
+	--local remoteurl =getSetVariable(ALTUI_SERVICE,"RemoteAccess", lul_device, "https://hirwatech.com/veralogin/Veralogin.php")
+	local remoteurl =getSetVariable(ALTUI_SERVICE,"RemoteAccess", lul_device, REMOTEACCESS_URL)
 	local css = getSetVariable(ALTUI_SERVICE,"ThemeCSS", lul_device, "")
 	local imgpath = getSetVariable(ALTUI_SERVICE,"ImagePath", lul_device, "")
 	local background = getSetVariable(ALTUI_SERVICE,"BackgroundImg", lul_device, "")
@@ -4344,7 +4377,6 @@ function startupDeferred(lul_device)
 	local custompages = getSetVariable(ALTUI_SERVICE, "Data_CustomPages_0", lul_device, "[]")
 	local emoncmsurl = getSetVariableIfEmpty(ALTUI_SERVICE, "EmonCmsUrl", lul_device, "https://emoncms.org")
 	local pendingReset = getSetVariable(ALTUI_SERVICE, "PendingReset", lul_device, 0)
-	local machineLearning = getSetVariable(ALTUI_SERVICE, "EnableMachineLearning", lul_device, 0)
 	local ctrltimeout = getSetVariable(ALTUI_SERVICE, "ControlTimeout", lul_device, DEFAULT_TIMEOUT)
 
 	getSetVariable(ALTUI_SERVICE, "GoogleLastError", lul_device, "")
@@ -4448,8 +4480,8 @@ function startupDeferred(lul_device)
 	-- clear the RESET flag
 	luup.variable_set(ALTUI_SERVICE, "PendingReset", 0, lul_device)
 
-	-- clear the tmp files
-	os.execute("rm /www/altui*")
+	-- create folder if needed and clear the tmp files
+	os.execute("mkdir -p /www/altui ; rm /www/altui/altui*")
 	
 	-- NOTHING to start
 	if( luup.version_branch == 1 and luup.version_major == 7) then

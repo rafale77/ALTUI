@@ -180,6 +180,16 @@ function altuiSortByWatchAltuiID(a, b) {
     return ((x < y) ? -1 : ((x > y) ? 1 : 0));
 };
 
+function altuiSortByAltuiID(a,b) {
+	var ainfo = MultiBox.controllerOf(a.altuiid)
+	var binfo = MultiBox.controllerOf(b.altuiid)
+	a= ainfo.controller*10000000 + parseInt(ainfo.id)
+	b= binfo.controller*10000000 + parseInt(binfo.id)		
+	if (a==b)
+		return 0
+	return (a<b) ? -1 : 1
+};
+		
 function get_device_index(deviceID){
     var devicesCount=jsonp.ud.devices.length;
     for(var i=0;i<devicesCount;i++){
@@ -329,12 +339,12 @@ var Ajax = (function(window,undefined) {
 			}
 			var jqxhr = $.ajax(ajaxopts )
 				.done(function(data, textStatus, jqXHR) {
-					upnphelper.unproxifyResult(data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
+					upnpHelper.unproxifyResult.apply(this,[data, textStatus, jqXHR, function(data,textStatus,jqXHR) {
 						if ($.isFunction( options.onSuccess )) {
 							var response = new Response(data,jqXHR);
 							(options.onSuccess)(response);
 						}
-					});
+					}]);
 				})
 				.fail(function(jqXHR, textStatus, errorThrown) {
 					if ($.isFunction( options.onFailure )) {
@@ -657,6 +667,7 @@ var application = (function(undefined) {
 var MessageCategory = {"SUCCESS":0,"NOTIFICATION":1,"ERROR":2,"WAITING":3,"CONFIRMATION":4};
 var DEVICETYPE_HOME_AUTO_GATEWAY = "urn:schemas-micasaverde-com:device:HomeAutomationGateway:1";
 var DEVICETYPE_BINARY_LIGHT = "urn:schemas-upnp-org:device:BinaryLight:1";
+var DEVICETYPE_WATER_VALVE = "urn:schemas-micasaverde-com:device:WaterValve:1";
 var DEVICETYPE_DIMMABLE_LIGHT = "urn:schemas-upnp-org:device:DimmableLight:1";
 var DEVICETYPE_THERMOSTAT = "urn:schemas-upnp-org:device:HVAC_ZoneThermostat:1";
 var DEVICETYPE_HUMIDITY_SENSOR = "urn:schemas-micasaverde-com:device:HumiditySensor:1";
@@ -1122,7 +1133,7 @@ var api = {
 		// API version 6 - this function need to call a success/fail callback
 		var dynamic = (options.dynamic && (options.dynamic === true))?1:0;
 		var onSuccess = (options.onSuccess && (typeof options.onSuccess == "function"))?options.onSuccess:void 0;
-		var deferred = $.Deferred();
+		//var deferred = $.Deferred();
 		try {
 			// set_device_state does not return a value - fail callback not usable
 			set_device_state(deviceId, service, variable, value, dynamic);
@@ -1149,7 +1160,7 @@ var api = {
 				onSuccess = options.onSuccess
 		}
 		// var onSuccess = (options.onSuccess && (typeof options.onSuccess == "function"))?options.onSuccess:void 0;
-		var deferred = $.Deferred();
+		//var deferred = $.Deferred();
 		try {
 			// set_device_state does not return a value - fail callback not usable
 			set_device_state(deviceId, service, variable, value, -1);
